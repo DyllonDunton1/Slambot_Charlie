@@ -1,0 +1,32 @@
+# ROS 2
+ros2_ws/build/
+ros2_ws/install/
+ros2_ws/log/
+
+# PlatformIO
+teensy_firmware/.pio/
+teensy_firmware/.vscode/.browse.c_cpp.db*
+teensy_firmware/.vscode/c_cpp_properties.json
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Node/web
+node_modules/
+dist/
+build/
+
+# OS/editor
+.DS_Store
+Thumbs.db
+.vscode/
+!.vscode/extensions.json
+
+# Logs/data
+*.log
+*.bag
+*.db3
+rosbag2_*/
