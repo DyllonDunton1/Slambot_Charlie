@@ -29,14 +29,6 @@ namespace Pins {
         constexpr uint8_t ENCODER_I2C_ADDRESS = 0x36;
     }
 
-    namespace IMU {
-        constexpr uint8_t I2C_ADDRESS = 0x68;
-    }
-
-    namespace Safety {
-        constexpr uint8_t ESTOP_PIN = 10;
-    }
-
     namespace StatusLED {
         constexpr uint8_t ONBOARD_LED_PIN = 13;
     }

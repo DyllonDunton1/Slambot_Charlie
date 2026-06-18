@@ -140,6 +140,8 @@ void setup() {
     right_wheel.init_wheel();
 
     last_us = micros();
+
+    digitalWrite(Pins::StatusLED::ONBOARD_LED_PIN, HIGH);
 }
 
 void loop() {
