@@ -8,13 +8,32 @@
 
 constexpr uint32_t motor_vel_update_time_us = 10000;
 
-constexpr float wheel_radius = 0.041f;
+constexpr float wheel_radius = 0.0425f;
 constexpr float circumference = 2.0f * 3.14159265f * wheel_radius;
 constexpr float ticks_per_rev = 4096.0f;
 constexpr float meters_per_tick = circumference / ticks_per_rev;
 
 constexpr bool left_flip = true;
 constexpr bool right_flip = false;
+
+constexpr uint32_t serial_status_update_time_us = 20000;  // 50 Hz
+constexpr uint32_t serial_command_timeout_us = 500000;    // 0.5 s
+
+uint32_t last_serial_status_us = 0;
+uint32_t last_serial_command_us = 0;
+
+String serial_line = "";
+
+float left_command_mps = 0.0f;
+float right_command_mps = 0.0f;
+
+bool serial_connected_once = false;
+uint32_t status_flags = 0;
+
+constexpr uint32_t STATUS_OK = 0;
+constexpr uint32_t STATUS_SERIAL_TIMEOUT = 1 << 0;
+constexpr uint32_t STATUS_LEFT_ODOM_ERROR = 1 << 1;
+constexpr uint32_t STATUS_RIGHT_ODOM_ERROR = 1 << 2;
 
 // Left AS5600 on default I2C bus: SDA/SCL
 Odometer left_odom(
@@ -61,74 +80,130 @@ void set_speeds(float left_speed, float right_speed) {
 uint32_t last_us = 0;
 float dt_s = 0.01f;
 
-int counter = 0;
-int dir_flag = 0;
 
-void update_test_speed() {
-    if (counter % 275 == 0) {
-        if (dir_flag == 0) {
-            set_speeds(0.2f, 0.2f);
-            dir_flag = 1;
-        }
-        else if (dir_flag == 1) {
-            set_speeds(0.0f, 0.0f);
-            dir_flag = 2;
-        }
-        else if (dir_flag == 2) {
-            set_speeds(0.2f, -0.2f);
-            dir_flag = 3;
+
+
+void handle_serial_line(const String &line) {
+    if (line.length() == 0) {
+        return;
+    }
+
+    char command = line.charAt(0);
+
+    if (command == 'V') {
+        float left = 0.0f;
+        float right = 0.0f;
+
+        int parsed = sscanf(line.c_str(), "V %f %f", &left, &right);
+
+        if (parsed == 2) {
+            left_command_mps = left;
+            right_command_mps = right;
+
+            left_wheel.set_final_speed(left_command_mps);
+            right_wheel.set_final_speed(right_command_mps);
+
+            last_serial_command_us = micros();
+            serial_connected_once = true;
+
+            status_flags &= ~STATUS_SERIAL_TIMEOUT;
         }
         else {
-            set_speeds(0.0f, 0.0f);
-            dir_flag = 0;
+            Serial.println("E BAD_V_COMMAND");
+        }
+    }
+    else if (command == 'S') {
+        left_command_mps = 0.0f;
+        right_command_mps = 0.0f;
+
+        left_wheel.set_final_speed(0.0f);
+        right_wheel.set_final_speed(0.0f);
+
+        last_serial_command_us = micros();
+
+        Serial.println("A STOP");
+    }
+    else {
+        Serial.println("E UNKNOWN_COMMAND");
+    }
+}
+
+void read_serial_commands() {
+    while (Serial.available() > 0) {
+        char c = Serial.read();
+
+        if (c == '\n') {
+            serial_line.trim();
+
+            if (serial_line.length() > 0) {
+                handle_serial_line(serial_line);
+            }
+
+            serial_line = "";
+        }
+        else if (c != '\r') {
+            serial_line += c;
+
+            // Prevent runaway buffer if something bad happens.
+            if (serial_line.length() > 80) {
+                serial_line = "";
+            }
         }
     }
 }
 
-void print_debug() {
-    Serial.print("counter: ");
-    Serial.print(counter);
+void check_serial_timeout() {
+    uint32_t now_us = micros();
 
-    Serial.print(" | L_dist: ");
-    Serial.print(left_odom.delta_to_distance_m(), 3);
+    if (serial_connected_once && (now_us - last_serial_command_us > serial_command_timeout_us)) {
+        left_command_mps = 0.0f;
+        right_command_mps = 0.0f;
 
-    Serial.print(" | L_final: ");
-    Serial.print(left_wheel.current_speed_final, 3);
+        left_wheel.set_final_speed(0.0f);
+        right_wheel.set_final_speed(0.0f);
 
-    Serial.print(" | L_target: ");
-    Serial.print(left_wheel.current_speed_target, 3);
+        status_flags |= STATUS_SERIAL_TIMEOUT;
+    }
+}
 
-    Serial.print(" | L_measured: ");
+void send_odom_status() {
+    uint32_t now_us = micros();
+
+    if (now_us - last_serial_status_us < serial_status_update_time_us) {
+        return;
+    }
+
+    last_serial_status_us = now_us;
+
+    Serial.print("O ");
+
+    Serial.print(left_odom.delta_to_distance_m(),4);
+    Serial.print(" ");
+
+    Serial.print(right_odom.delta_to_distance_m(),4);
+    Serial.print(" ");
+
     Serial.print(left_wheel.current_speed_odom, 3);
+    Serial.print(" ");
 
-    Serial.print(" | L_error: ");
-    Serial.print(left_wheel.error, 3);
-
-    Serial.print(" | L_corr: ");
-    Serial.print(left_wheel.correction, 3);
-
-    Serial.print(" || R_dist: ");
-    Serial.print(right_odom.delta_to_distance_m(), 3);
-
-    Serial.print(" | R_final: ");
-    Serial.print(right_wheel.current_speed_final, 3);
-
-    Serial.print(" | R_target: ");
-    Serial.print(right_wheel.current_speed_target, 3);
-
-    Serial.print(" | R_measured: ");
     Serial.print(right_wheel.current_speed_odom, 3);
+    Serial.print(" ");
 
-    Serial.print(" | R_error: ");
-    Serial.print(right_wheel.error, 3);
-
-    Serial.print(" | R_corr: ");
-    Serial.println(right_wheel.correction, 3);
+    Serial.println(status_flags);
 }
 
 void setup() {
     Serial.begin(115200);
-    delay(1000);
+
+    // Do not wait forever for Serial on a robot.
+    // This gives the Pi time to connect, but still boots standalone.
+    uint32_t serial_start_ms = millis();
+    while (!Serial && (millis() - serial_start_ms < 2000)) {
+        delay(10);
+    }
+
+    last_serial_command_us = micros();
+    last_serial_status_us = micros();
 
     Wire.begin();
     Wire.setClock(Pins::I2C::CLOCK_HZ);
@@ -147,21 +222,18 @@ void setup() {
 void loop() {
     uint32_t now_us = micros();
 
+    read_serial_commands();
+    check_serial_timeout();
+
     if (now_us - last_us >= motor_vel_update_time_us) {
         uint32_t elapsed_us = now_us - last_us;
         last_us = now_us;
 
         dt_s = elapsed_us / 1000000.0f;
 
-        update_test_speed();
-
         left_wheel.speed_control_update(dt_s);
         right_wheel.speed_control_update(dt_s);
-
-        if (counter % 10 == 0) {
-            print_debug();
-        }
-
-        counter++;
     }
+
+    send_odom_status();
 }
