@@ -56,7 +56,7 @@ bool Odometer::update_motor_delta() {
 
     delta = (int32_t)rawAngle - (int32_t)oldRawAngle;
 
-    if (flip_dir) delta *= -1;
+    if (!flip_dir) delta *= -1;
 
     if (delta > 2048) {
         delta -= 4096;

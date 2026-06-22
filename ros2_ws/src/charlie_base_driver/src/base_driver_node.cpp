@@ -8,6 +8,7 @@
 
 #include "geometry_msgs/msg/transform_stamped.hpp"
 #include "tf2/LinearMath/Quaternion.h"
+#include "std_msgs/msg/string.hpp"
 
 namespace charlie_base_driver {
 
@@ -50,6 +51,7 @@ BaseDriverNode::BaseDriverNode()
     );
 
     odom_pub_ = this->create_publisher<nav_msgs::msg::Odometry>("/odom", 10);
+    base_debug_pub_ = this->create_publisher<std_msgs::msg::String>("/base_debug", 10);
 
     if (publish_tf_) {
         tf_broadcaster_ = std::make_unique<tf2_ros::TransformBroadcaster>(*this);
@@ -78,7 +80,7 @@ void BaseDriverNode::declare_parameters()
 {
     this->declare_parameter<std::string>("serial_port", "/dev/ttyACM0");
     this->declare_parameter<int>("baud_rate", 115200);
-    this->declare_parameter<double>("wheel_separation", 0.220);
+    this->declare_parameter<double>("wheel_separation", 0.2120);
     this->declare_parameter<double>("cmd_timeout_s", 0.500);
     this->declare_parameter<double>("command_rate_hz", 50.0);
     this->declare_parameter<std::string>("odom_frame", "odom");
@@ -237,12 +239,74 @@ void BaseDriverNode::handle_teensy_line(const std::string & line)
             RCLCPP_WARN(this->get_logger(), "Bad odom packet: %s", line.c_str());
         }
     }
+    else if (line[0] == 'D') {
+        handle_debug_packet(line);
+    }
     else if (line[0] == 'E') {
         RCLCPP_WARN(this->get_logger(), "Teensy error: %s", line.c_str());
     }
     else {
         RCLCPP_INFO(this->get_logger(), "Teensy says: %s", line.c_str());
     }
+}
+
+void BaseDriverNode::handle_debug_packet(const std::string & line)
+{
+    char packet_type = '\0';
+
+    double left_target_mps = 0.0;
+    double right_target_mps = 0.0;
+
+    double left_measured_mps = 0.0;
+    double right_measured_mps = 0.0;
+
+    double left_error_mps = 0.0;
+    double right_error_mps = 0.0;
+
+    double left_integral_error_mps = 0.0;
+    double right_integral_error_mps = 0.0;
+
+    double left_command = 0.0;
+    double right_command = 0.0;
+
+    std::istringstream ss(line);
+
+    ss >> packet_type
+       >> left_target_mps
+       >> right_target_mps
+       >> left_measured_mps
+       >> right_measured_mps
+       >> left_error_mps
+       >> right_error_mps
+       >> left_integral_error_mps
+       >> right_integral_error_mps
+       >> left_command
+       >> right_command;
+
+    if (ss.fail() || packet_type != 'D') {
+        RCLCPP_WARN(this->get_logger(), "Bad debug packet: %s", line.c_str());
+        return;
+    }
+
+    std_msgs::msg::String msg;
+
+    std::ostringstream json;
+    json << std::fixed << std::setprecision(4);
+    json << "{";
+    json << "\"left_target_mps\":" << left_target_mps << ",";
+    json << "\"right_target_mps\":" << right_target_mps << ",";
+    json << "\"left_measured_mps\":" << left_measured_mps << ",";
+    json << "\"right_measured_mps\":" << right_measured_mps << ",";
+    json << "\"left_error_mps\":" << left_error_mps << ",";
+    json << "\"right_error_mps\":" << right_error_mps << ",";
+    json << "\"left_integral_error_mps\":" << left_integral_error_mps << ",";
+    json << "\"right_integral_error_mps\":" << right_integral_error_mps << ",";
+    json << "\"left_command\":" << left_command << ",";
+    json << "\"right_command\":" << right_command;
+    json << "}";
+
+    msg.data = json.str();
+    base_debug_pub_->publish(msg);
 }
 
 void BaseDriverNode::process_odom_packet(

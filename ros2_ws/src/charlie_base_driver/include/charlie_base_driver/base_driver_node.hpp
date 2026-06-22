@@ -7,6 +7,7 @@
 #include "rclcpp/rclcpp.hpp"
 #include "geometry_msgs/msg/twist.hpp"
 #include "nav_msgs/msg/odometry.hpp"
+#include "std_msgs/msg/string.hpp"
 #include "tf2_ros/transform_broadcaster.h"
 
 #include "charlie_base_driver/serial_port.hpp"
@@ -33,6 +34,7 @@ private:
 
     std::string make_speed_command_string() const;
     void handle_teensy_line(const std::string & line);
+    void handle_debug_packet(const std::string & line);
 
     void process_odom_packet(
         double left_total_m,
@@ -91,6 +93,7 @@ private:
     // ROS interfaces
     rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr cmd_vel_sub_;
     rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr odom_pub_;
+    rclcpp::Publisher<std_msgs::msg::String>::SharedPtr base_debug_pub_;
     std::unique_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
     rclcpp::TimerBase::SharedPtr control_timer_;
 };

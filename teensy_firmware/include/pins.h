@@ -14,17 +14,17 @@ namespace Pins {
     }
 
     namespace LeftWheel {
-        constexpr uint8_t STEP_PIN   = 1;
-        constexpr uint8_t DIR_PIN    = 2;
-        constexpr uint8_t ENABLE_PIN = 3;
+        constexpr uint8_t STEP_PIN   = 29;
+        constexpr uint8_t DIR_PIN    = 31;
+        constexpr uint8_t ENABLE_PIN = 32;
 
         constexpr uint8_t ENCODER_I2C_ADDRESS = 0x36;
     }
 
     namespace RightWheel {
-        constexpr uint8_t STEP_PIN   = 29;
-        constexpr uint8_t DIR_PIN    = 31;
-        constexpr uint8_t ENABLE_PIN = 32;
+        constexpr uint8_t STEP_PIN   = 1;
+        constexpr uint8_t DIR_PIN    = 2;
+        constexpr uint8_t ENABLE_PIN = 3;
 
         constexpr uint8_t ENCODER_I2C_ADDRESS = 0x36;
     }

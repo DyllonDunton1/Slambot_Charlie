@@ -13,14 +13,18 @@ constexpr float circumference = 2.0f * 3.14159265f * wheel_radius;
 constexpr float ticks_per_rev = 4096.0f;
 constexpr float meters_per_tick = circumference / ticks_per_rev;
 
-constexpr bool left_flip = true;
-constexpr bool right_flip = false;
+constexpr bool left_flip = false;
+constexpr bool right_flip = true;
 
 constexpr uint32_t serial_status_update_time_us = 20000;  // 50 Hz
 constexpr uint32_t serial_command_timeout_us = 500000;    // 0.5 s
 
 uint32_t last_serial_status_us = 0;
 uint32_t last_serial_command_us = 0;
+
+constexpr uint32_t serial_debug_update_time_us = 100000;  // 10 Hz
+uint32_t last_serial_debug_us = 0;
+
 
 String serial_line = "";
 
@@ -192,6 +196,50 @@ void send_odom_status() {
     Serial.println(status_flags);
 }
 
+void send_debug_status() {
+
+    uint32_t debug_now_us = micros();
+
+    if (debug_now_us - last_serial_debug_us < serial_debug_update_time_us) {
+        return;
+    }
+
+    last_serial_debug_us = debug_now_us;
+
+    Serial.print("D ");
+
+    Serial.print(left_wheel.current_speed_target, 3);
+    Serial.print(" ");
+
+    Serial.print(right_wheel.current_speed_target, 3);
+    Serial.print(" ");
+
+    Serial.print(left_wheel.current_speed_odom, 3);
+    Serial.print(" ");
+
+    Serial.print(right_wheel.current_speed_odom, 3);
+    Serial.print(" ");
+
+    Serial.print(left_wheel.error, 3);
+    Serial.print(" ");
+
+    Serial.print(right_wheel.error, 3);
+    Serial.print(" ");
+
+    Serial.print(left_wheel.integral_error, 3);
+    Serial.print(" ");
+
+    Serial.print(right_wheel.integral_error, 3);
+    Serial.print(" ");
+
+    Serial.print(left_wheel.commanded_speed, 3);
+    Serial.print(" ");
+
+    Serial.println(right_wheel.commanded_speed, 3);
+
+
+}
+
 void setup() {
     Serial.begin(115200);
 
@@ -236,4 +284,5 @@ void loop() {
     }
 
     send_odom_status();
+    send_debug_status();
 }
