@@ -1,0 +1,243 @@
+<?xml version="1.0"?>
+<robot name="charlie" xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+  <!--
+    Charlie frame convention:
+      x = forward
+      y = left
+      z = up
+
+    base_link is placed near the center of the robot footprint,
+    roughly halfway between the wheels / wheel axle reference.
+
+    Sensor xyz values are measured relative to base_link.
+    For the LiDAR, camera, and IMU, z is measured to the vertical center
+    of the physical component unless otherwise noted.
+  -->
+
+  <!-- Base plate dimensions -->
+  <xacro:property name="base_length" value="0.240"/>
+  <xacro:property name="base_width"  value="0.175"/>
+  <xacro:property name="base_height" value="0.006"/>
+
+  <!-- Base plate visual/collision center relative to base_link -->
+  <xacro:property name="base_box_x" value="-0.070"/>
+  <xacro:property name="base_box_y" value="0.000"/>
+  <xacro:property name="base_box_z" value="0.037"/>
+
+  <!-- Wheel dimensions -->
+  <xacro:property name="wheel_diameter" value="0.084"/>
+  <xacro:property name="wheel_radius" value="${wheel_diameter / 2.0}"/>
+  <xacro:property name="wheel_width" value="0.00508"/>
+  <xacro:property name="wheel_separation" value="0.210"/>
+
+  <!-- LiDAR dimensions -->
+  <xacro:property name="lidar_radius" value="0.031"/>
+  <xacro:property name="lidar_height" value="0.023"/>
+
+  <!-- Camera enclosure dimensions -->
+  <xacro:property name="camera_length" value="0.012"/>
+  <xacro:property name="camera_width" value="0.064"/>
+  <xacro:property name="camera_height" value="0.023"/>
+
+  <!-- IMU board dimensions -->
+  <xacro:property name="imu_length" value="0.025"/>
+  <xacro:property name="imu_width" value="0.025"/>
+  <xacro:property name="imu_height" value="0.004"/>
+
+  <!-- Sensor frame positions relative to base_link -->
+  <xacro:property name="laser_x" value="-0.025"/>
+  <xacro:property name="laser_y" value="0.000"/>
+  <xacro:property name="laser_z" value="0.185"/>
+
+  <!-- camera_link is the camera sensor frame.
+       The sensor is offset from the enclosure center in y.
+       The enclosure itself is centered at robot y = 0. -->
+  <xacro:property name="camera_x" value="0.045"/>
+  <xacro:property name="camera_y" value="-0.016"/>
+  <xacro:property name="camera_z" value="0.065"/>
+
+  <!-- Offset the camera body visual relative to camera_link so the
+       enclosure center is at y = 0 in base_link coordinates. -->
+  <xacro:property name="camera_body_x" value="0.000"/>
+  <xacro:property name="camera_body_y" value="${-camera_y}"/>
+  <xacro:property name="camera_body_z" value="0.000"/>
+
+  <xacro:property name="imu_x" value="0.000"/>
+  <xacro:property name="imu_y" value="0.000"/>
+  <xacro:property name="imu_z" value="0.130"/>
+
+  <!-- Materials -->
+  <material name="charlie_dark">
+    <color rgba="0.1 0.1 0.1 1.0"/>
+  </material>
+
+  <material name="wheel_gray">
+    <color rgba="0.35 0.35 0.35 1.0"/>
+  </material>
+
+  <material name="lidar_blue">
+    <color rgba="0.1 0.3 0.9 1.0"/>
+  </material>
+
+  <material name="camera_black">
+    <color rgba="0.02 0.02 0.02 1.0"/>
+  </material>
+
+  <material name="imu_green">
+    <color rgba="0.0 0.7 0.2 1.0"/>
+  </material>
+
+
+  <!-- Main robot body frame.
+       base_link itself stays at the wheel axle reference.
+       The base plate box is offset relative to base_link. -->
+  <link name="base_link">
+    <visual>
+      <origin xyz="${base_box_x} ${base_box_y} ${base_box_z}" rpy="0 0 0"/>
+      <geometry>
+        <box size="${base_length} ${base_width} ${base_height}"/>
+      </geometry>
+      <material name="charlie_dark"/>
+    </visual>
+
+    <collision>
+      <origin xyz="${base_box_x} ${base_box_y} ${base_box_z}" rpy="0 0 0"/>
+      <geometry>
+        <box size="${base_length} ${base_width} ${base_height}"/>
+      </geometry>
+    </collision>
+  </link>
+
+
+  <!-- Wheels.
+       URDF cylinders are along local z by default.
+       Rotate 90 degrees about x so the wheel axle points along robot y. -->
+  <link name="left_wheel_link">
+    <visual>
+      <origin xyz="0 0 0" rpy="1.5708 0 0"/>
+      <geometry>
+        <cylinder radius="${wheel_radius}" length="${wheel_width}"/>
+      </geometry>
+      <material name="wheel_gray"/>
+    </visual>
+
+    <collision>
+      <origin xyz="0 0 0" rpy="1.5708 0 0"/>
+      <geometry>
+        <cylinder radius="${wheel_radius}" length="${wheel_width}"/>
+      </geometry>
+    </collision>
+  </link>
+
+  <joint name="left_wheel_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="left_wheel_link"/>
+    <origin xyz="0 ${wheel_separation / 2.0} 0" rpy="0 0 0"/>
+  </joint>
+
+  <link name="right_wheel_link">
+    <visual>
+      <origin xyz="0 0 0" rpy="1.5708 0 0"/>
+      <geometry>
+        <cylinder radius="${wheel_radius}" length="${wheel_width}"/>
+      </geometry>
+      <material name="wheel_gray"/>
+    </visual>
+
+    <collision>
+      <origin xyz="0 0 0" rpy="1.5708 0 0"/>
+      <geometry>
+        <cylinder radius="${wheel_radius}" length="${wheel_width}"/>
+      </geometry>
+    </collision>
+  </link>
+
+  <joint name="right_wheel_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="right_wheel_link"/>
+    <origin xyz="0 ${-wheel_separation / 2.0} 0" rpy="0 0 0"/>
+  </joint>
+
+
+  <!-- LiDAR frame.
+       The LiDAR driver should publish LaserScan with header.frame_id = laser_frame.
+       laser_frame is at the LiDAR scan/body center height. -->
+  <link name="laser_frame">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <cylinder radius="${lidar_radius}" length="${lidar_height}"/>
+      </geometry>
+      <material name="lidar_blue"/>
+    </visual>
+
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <cylinder radius="${lidar_radius}" length="${lidar_height}"/>
+      </geometry>
+    </collision>
+  </link>
+
+  <joint name="laser_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="laser_frame"/>
+    <origin xyz="${laser_x} ${laser_y} ${laser_z}" rpy="0 0 0"/>
+  </joint>
+
+
+  <!-- Camera frame.
+       camera_link is the sensor frame.
+       The enclosure visual is offset so the camera body/enclosure center
+       is centered at robot y = 0 even though the sensor is at y = -0.016. -->
+  <link name="camera_link">
+    <visual>
+      <origin xyz="${camera_body_x} ${camera_body_y} ${camera_body_z}" rpy="0 0 0"/>
+      <geometry>
+        <box size="${camera_length} ${camera_width} ${camera_height}"/>
+      </geometry>
+      <material name="camera_black"/>
+    </visual>
+
+    <collision>
+      <origin xyz="${camera_body_x} ${camera_body_y} ${camera_body_z}" rpy="0 0 0"/>
+      <geometry>
+        <box size="${camera_length} ${camera_width} ${camera_height}"/>
+      </geometry>
+    </collision>
+  </link>
+
+  <joint name="camera_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="camera_link"/>
+    <origin xyz="${camera_x} ${camera_y} ${camera_z}" rpy="0 0 0"/>
+  </joint>
+
+
+  <!-- IMU frame.
+       imu_link is at the IMU board center. -->
+  <link name="imu_link">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="${imu_length} ${imu_width} ${imu_height}"/>
+      </geometry>
+      <material name="imu_green"/>
+    </visual>
+
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="${imu_length} ${imu_width} ${imu_height}"/>
+      </geometry>
+    </collision>
+  </link>
+
+  <joint name="imu_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="imu_link"/>
+    <origin xyz="${imu_x} ${imu_y} ${imu_z}" rpy="0 0 0"/>
+  </joint>
+
+</robot>

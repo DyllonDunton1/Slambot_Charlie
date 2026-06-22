@@ -16,10 +16,18 @@ def generate_launch_description():
     video_device = LaunchConfiguration("video_device")
     pixel_format = LaunchConfiguration("pixel_format")
 
+    lidar_port = LaunchConfiguration("lidar_port")
+
     web_dashboard_camera_launch = PathJoinSubstitution([
         FindPackageShare("charlie_web_dashboard"),
         "launch",
         "web_dashboard_camera.launch.py",
+    ])
+
+    description_launch = PathJoinSubstitution([
+        FindPackageShare("charlie_description"),
+        "launch",
+        "description.launch.py",
     ])
 
     return LaunchDescription([
@@ -53,6 +61,12 @@ def generate_launch_description():
             description="Camera pixel format. YUYV works reliably with v4l2_camera.",
         ),
 
+        DeclareLaunchArgument(
+            "lidar_port",
+            default_value="/dev/serial/by-id/usb-Silicon_Labs_CP2102_USB_to_UART_Bridge_Controller_0001-if00-port0",
+            description="Serial port for the ROBOTIS LDS LiDAR",
+        ),
+
         Node(
             package="charlie_base_driver",
             executable="base_driver_node",
@@ -70,11 +84,26 @@ def generate_launch_description():
             }],
         ),
 
+        Node(
+            package="hls_lfcd_lds_driver",
+            executable="hlds_laser_publisher",
+            name="lidar",
+            output="screen",
+            parameters=[{
+                "port": lidar_port,
+                "frame_id": "laser_frame",
+            }],
+        ),
+
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(web_dashboard_camera_launch),
             launch_arguments={
                 "video_device": video_device,
                 "pixel_format": pixel_format,
             }.items(),
+        ),
+
+        IncludeLaunchDescription(
+            PythonLaunchDescriptionSource(description_launch),
         ),
     ])
