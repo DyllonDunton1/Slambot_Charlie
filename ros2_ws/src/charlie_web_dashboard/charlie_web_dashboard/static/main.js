@@ -2,6 +2,8 @@ const keys = {};
 let buttonLinear = 0.0;
 let buttonAngular = 0.0;
 
+let tuningFieldsPopulated = false;
+
 console.log("Charlie dashboard main.js loaded");
 
 const linearSlider = document.getElementById("linear-speed");
@@ -16,6 +18,17 @@ const logStatus = document.getElementById("log-status");
 const mapImage = document.getElementById("map-image");
 const mapStatus = document.getElementById("map-status");
 const downloadMapButton = document.getElementById("download-map");
+
+const tuningKpInput = document.getElementById("tuning-kp");
+const tuningKiInput = document.getElementById("tuning-ki");
+const tuningWheelRadiusInput = document.getElementById("tuning-wheel-radius");
+const tuningWheelSeparationInput = document.getElementById("tuning-wheel-separation");
+const applyTuningButton = document.getElementById("apply-tuning");
+const resetIntegralButton = document.getElementById("reset-integral");
+const tuningStatus = document.getElementById("tuning-status");
+
+const poseStatus = document.getElementById("pose-status");
+const robotMarker = document.getElementById("robot-marker");
 
 
 function linearSpeed() {
@@ -36,6 +49,9 @@ angularSlider.addEventListener("input", updateSliderReadouts);
 
 downloadMapButton.addEventListener("click", downloadMapPng);
 
+applyTuningButton.addEventListener("click", applyTuning);
+resetIntegralButton.addEventListener("click", resetIntegral);
+
 function bindClick(id, handler) {
     const element = document.getElementById(id);
 
@@ -52,6 +68,91 @@ bindClick("start-log", startDebugLog);
 bindClick("stop-log", stopDebugLog);
 bindClick("clear-log", clearDebugLog);
 bindClick("download-log", downloadDebugLog);
+
+function setPoseStatus(text, mode = "normal") {
+    poseStatus.textContent = text;
+
+    poseStatus.classList.remove("active");
+    poseStatus.classList.remove("error");
+
+    if (mode === "active") {
+        poseStatus.classList.add("active");
+    }
+
+    if (mode === "error") {
+        poseStatus.classList.add("error");
+    }
+}
+
+function updateRobotMarker(status) {
+    if (!status.map || !status.robot_pose) {
+        robotMarker.style.display = "none";
+        setPoseStatus("Pose: waiting");
+        return;
+    }
+
+    const map = status.map;
+    const pose = status.robot_pose;
+
+    if (!map.received || !pose.received) {
+        robotMarker.style.display = "none";
+
+        if (pose.error) {
+            setPoseStatus(`Pose: unavailable | ${pose.error}`, "error");
+        } else {
+            setPoseStatus("Pose: waiting");
+        }
+
+        return;
+    }
+
+    const mapImageRect = mapImage.getBoundingClientRect();
+    const containerRect = mapImage.parentElement.getBoundingClientRect();
+
+    const mapWidthCells = map.width;
+    const mapHeightCells = map.height;
+    const resolution = map.resolution;
+    const originX = map.origin_x;
+    const originY = map.origin_y;
+
+    if (mapWidthCells <= 0 || mapHeightCells <= 0 || resolution <= 0) {
+        robotMarker.style.display = "none";
+        setPoseStatus("Pose: bad map metadata", "error");
+        return;
+    }
+
+    const cellX = (pose.x - originX) / resolution;
+    const cellY = (pose.y - originY) / resolution;
+
+    const imagePixelX = cellX;
+    const imagePixelY = mapHeightCells - cellY;
+
+    const displayedImageWidth = mapImageRect.width;
+    const displayedImageHeight = mapImageRect.height;
+
+    const screenX = mapImageRect.left - containerRect.left
+        + (imagePixelX / mapWidthCells) * displayedImageWidth;
+
+    const screenY = mapImageRect.top - containerRect.top
+        + (imagePixelY / mapHeightCells) * displayedImageHeight;
+
+    robotMarker.style.display = "block";
+    robotMarker.style.left = `${screenX}px`;
+    robotMarker.style.top = `${screenY}px`;
+
+    // CSS screen coordinates have y downward.
+    // Negative yaw usually gives the expected visual rotation after vertical map flip.
+    const yawDegForScreen = -pose.yaw_deg;
+
+    robotMarker.style.transform = `translate(-50%, -50%) rotate(${yawDegForScreen}deg)`;
+
+    const age = pose.last_update_age_s ?? 0.0;
+
+    setPoseStatus(
+        `Pose: x=${pose.x.toFixed(2)} m | y=${pose.y.toFixed(2)} m | yaw=${pose.yaw_deg.toFixed(1)}° | age ${age.toFixed(1)} s`,
+        "active"
+    );
+}
 
 function computeCommand() {
     let linear = buttonLinear;
@@ -102,6 +203,66 @@ function refreshMapImage() {
     mapImage.src = `/api/map/image?t=${Date.now()}`;
 }
 
+function setTuningStatus(text, mode = "normal") {
+    tuningStatus.textContent = text;
+
+    tuningStatus.classList.remove("active");
+    tuningStatus.classList.remove("error");
+
+    if (mode === "active") {
+        tuningStatus.classList.add("active");
+    }
+
+    if (mode === "error") {
+        tuningStatus.classList.add("error");
+    }
+}
+
+async function sendTuningCommand(command) {
+    try {
+        const response = await fetch("/api/tuning", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+            },
+            body: JSON.stringify(command),
+        });
+
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
+        }
+
+        const data = await response.json();
+
+        setTuningStatus(
+            `Tuning: sent ${JSON.stringify(data.command)}`,
+            "active"
+        );
+
+        await updateStatus();
+    } catch (error) {
+        console.error("Failed to send tuning command", error);
+        setTuningStatus("Tuning: failed", "error");
+    }
+}
+
+async function applyTuning() {
+    const command = {
+        kp: parseFloat(tuningKpInput.value),
+        ki: parseFloat(tuningKiInput.value),
+        wheel_radius_m: parseFloat(tuningWheelRadiusInput.value),
+        wheel_separation_m: parseFloat(tuningWheelSeparationInput.value),
+    };
+
+    await sendTuningCommand(command);
+}
+
+async function resetIntegral() {
+    await sendTuningCommand({
+        reset_integral: true,
+    });
+}
+
 async function sendCommand(command) {
     try {
         await fetch("/api/cmd_vel", {
@@ -139,6 +300,37 @@ async function updateStatus() {
         const status = await response.json();
         statusReadout.textContent = JSON.stringify(status, null, 2);
 
+        if (!tuningFieldsPopulated && status.debug && status.debug.data) {
+            const debug = status.debug.data;
+
+            let populatedAnyField = false;
+
+            if (debug.kp !== undefined) {
+                tuningKpInput.value = Number(debug.kp).toFixed(3);
+                populatedAnyField = true;
+            }
+
+            if (debug.ki !== undefined) {
+                tuningKiInput.value = Number(debug.ki).toFixed(3);
+                populatedAnyField = true;
+            }
+
+            if (debug.wheel_radius_m !== undefined) {
+                tuningWheelRadiusInput.value = Number(debug.wheel_radius_m).toFixed(4);
+                populatedAnyField = true;
+            }
+
+            if (debug.wheel_separation_m !== undefined) {
+                tuningWheelSeparationInput.value = Number(debug.wheel_separation_m).toFixed(4);
+                populatedAnyField = true;
+            }
+
+            if (populatedAnyField) {
+                tuningFieldsPopulated = true;
+                setTuningStatus("Tuning: loaded current values", "active");
+            }
+        }
+
         if (status.debug_log) {
             const sampleCount = status.debug_log.sample_count ?? 0;
             const duration = status.debug_log.duration_s ?? 0.0;
@@ -172,8 +364,11 @@ async function updateStatus() {
                 setMapStatus("Map: waiting");
             }
         }
+        updateRobotMarker(status);
+
     } catch (error) {
         statusReadout.textContent = "Status connection error";
+        setPoseStatus("Pose: status connection error", "error");
     }
 }
 

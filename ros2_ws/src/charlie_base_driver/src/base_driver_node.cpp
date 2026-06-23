@@ -5,6 +5,7 @@
 #include <memory>
 #include <sstream>
 #include <string>
+#include <algorithm>
 
 #include "geometry_msgs/msg/transform_stamped.hpp"
 #include "tf2/LinearMath/Quaternion.h"
@@ -33,7 +34,10 @@ BaseDriverNode::BaseDriverNode()
   previous_left_total_m_(0.0),
   previous_right_total_m_(0.0),
   last_status_(0),
-  serial_connected_(false)
+  serial_connected_(false),
+  last_kp_(0.0),
+  last_ki_(0.0),
+  last_wheel_radius_m_(0.0)
 {
     declare_parameters();
     load_parameters();
@@ -48,6 +52,16 @@ BaseDriverNode::BaseDriverNode()
         "/cmd_vel",
         10,
         std::bind(&BaseDriverNode::cmd_vel_callback, this, std::placeholders::_1)
+    );
+
+    tuning_command_sub_ = this->create_subscription<std_msgs::msg::String>(
+        "/base_tuning_command",
+        10,
+        std::bind(&BaseDriverNode::tuning_command_callback, this, std::placeholders::_1)
+    );
+
+    parameter_callback_handle_ = this->add_on_set_parameters_callback(
+        std::bind(&BaseDriverNode::parameters_callback, this, std::placeholders::_1)
     );
 
     odom_pub_ = this->create_publisher<nav_msgs::msg::Odometry>("/odom", 10);
@@ -74,6 +88,7 @@ BaseDriverNode::BaseDriverNode()
     RCLCPP_INFO(this->get_logger(), "odom_frame: %s", odom_frame_.c_str());
     RCLCPP_INFO(this->get_logger(), "base_frame: %s", base_frame_.c_str());
     RCLCPP_INFO(this->get_logger(), "publish_tf: %s", publish_tf_ ? "true" : "false");
+    RCLCPP_INFO(this->get_logger(), "Subscribing tuning commands on /base_tuning_command");
 }
 
 void BaseDriverNode::declare_parameters()
@@ -269,6 +284,10 @@ void BaseDriverNode::handle_debug_packet(const std::string & line)
     double left_command = 0.0;
     double right_command = 0.0;
 
+    double kp = last_kp_;
+    double ki = last_ki_;
+    double wheel_radius_m = last_wheel_radius_m_;
+
     std::istringstream ss(line);
 
     ss >> packet_type
@@ -288,10 +307,18 @@ void BaseDriverNode::handle_debug_packet(const std::string & line)
         return;
     }
 
+    // Optional extra tuning fields from Teensy:
+    // D ... left_command right_command kp ki wheel_radius
+    if (ss >> kp >> ki >> wheel_radius_m) {
+        last_kp_ = kp;
+        last_ki_ = ki;
+        last_wheel_radius_m_ = wheel_radius_m;
+    }
+
     std_msgs::msg::String msg;
 
     std::ostringstream json;
-    json << std::fixed << std::setprecision(4);
+    json << std::fixed << std::setprecision(6);
     json << "{";
     json << "\"left_target_mps\":" << left_target_mps << ",";
     json << "\"right_target_mps\":" << right_target_mps << ",";
@@ -302,7 +329,11 @@ void BaseDriverNode::handle_debug_packet(const std::string & line)
     json << "\"left_integral_error_mps\":" << left_integral_error_mps << ",";
     json << "\"right_integral_error_mps\":" << right_integral_error_mps << ",";
     json << "\"left_command\":" << left_command << ",";
-    json << "\"right_command\":" << right_command;
+    json << "\"right_command\":" << right_command << ",";
+    json << "\"kp\":" << kp << ",";
+    json << "\"ki\":" << ki << ",";
+    json << "\"wheel_radius_m\":" << wheel_radius_m << ",";
+    json << "\"wheel_separation_m\":" << wheel_separation_;
     json << "}";
 
     msg.data = json.str();
@@ -413,6 +444,191 @@ void BaseDriverNode::publish_odom(
 
         tf_broadcaster_->sendTransform(transform);
     }
+}
+
+void BaseDriverNode::send_teensy_config_command(const std::string & command)
+{
+    if (!serial_connected_) {
+        RCLCPP_WARN(
+            this->get_logger(),
+            "Cannot send Teensy config command because serial is not connected: %s",
+            command.c_str()
+        );
+        return;
+    }
+
+    const bool success = serial_port_.write_string(command + "\n");
+
+    if (!success) {
+        RCLCPP_WARN(this->get_logger(), "Serial write failed for config command: %s", command.c_str());
+        serial_connected_ = false;
+        serial_port_.close_port();
+        return;
+    }
+
+    RCLCPP_INFO(this->get_logger(), "Sent Teensy config: %s", command.c_str());
+}
+
+
+void BaseDriverNode::tuning_command_callback(const std_msgs::msg::String::SharedPtr msg)
+{
+    const std::string text = msg->data;
+
+    RCLCPP_INFO(this->get_logger(), "Received tuning command: %s", text.c_str());
+
+    auto find_number = [&](const std::string & key, double & value) -> bool {
+        const std::string quoted_key = "\"" + key + "\"";
+        const std::size_t key_pos = text.find(quoted_key);
+
+        if (key_pos == std::string::npos) {
+            return false;
+        }
+
+        const std::size_t colon_pos = text.find(':', key_pos);
+        if (colon_pos == std::string::npos) {
+            return false;
+        }
+
+        std::size_t start = colon_pos + 1;
+        while (start < text.size() && std::isspace(static_cast<unsigned char>(text[start]))) {
+            ++start;
+        }
+
+        std::size_t end = start;
+        while (
+            end < text.size() &&
+            (std::isdigit(static_cast<unsigned char>(text[end])) ||
+             text[end] == '.' ||
+             text[end] == '-' ||
+             text[end] == '+' ||
+             text[end] == 'e' ||
+             text[end] == 'E')
+        ) {
+            ++end;
+        }
+
+        if (end == start) {
+            return false;
+        }
+
+        try {
+            value = std::stod(text.substr(start, end - start));
+            return true;
+        }
+        catch (const std::exception &) {
+            return false;
+        }
+    };
+
+    auto find_bool = [&](const std::string & key, bool & value) -> bool {
+        const std::string quoted_key = "\"" + key + "\"";
+        const std::size_t key_pos = text.find(quoted_key);
+
+        if (key_pos == std::string::npos) {
+            return false;
+        }
+
+        const std::size_t colon_pos = text.find(':', key_pos);
+        if (colon_pos == std::string::npos) {
+            return false;
+        }
+
+        std::size_t start = colon_pos + 1;
+        while (start < text.size() && std::isspace(static_cast<unsigned char>(text[start]))) {
+            ++start;
+        }
+
+        if (text.compare(start, 4, "true") == 0) {
+            value = true;
+            return true;
+        }
+
+        if (text.compare(start, 5, "false") == 0) {
+            value = false;
+            return true;
+        }
+
+        return false;
+    };
+
+    double kp = 0.0;
+    double ki = 0.0;
+    double wheel_radius_m = 0.0;
+    double wheel_separation_m = 0.0;
+    bool reset_integral = false;
+
+    if (find_number("kp", kp)) {
+        std::ostringstream command;
+        command << std::fixed << std::setprecision(6);
+        command << "C KP " << kp;
+        send_teensy_config_command(command.str());
+        last_kp_ = kp;
+    }
+
+    if (find_number("ki", ki)) {
+        std::ostringstream command;
+        command << std::fixed << std::setprecision(6);
+        command << "C KI " << ki;
+        send_teensy_config_command(command.str());
+        last_ki_ = ki;
+    }
+
+    if (find_number("wheel_radius_m", wheel_radius_m)) {
+        std::ostringstream command;
+        command << std::fixed << std::setprecision(6);
+        command << "C WHEEL_RADIUS " << wheel_radius_m;
+        send_teensy_config_command(command.str());
+        last_wheel_radius_m_ = wheel_radius_m;
+    }
+
+    if (find_number("wheel_separation_m", wheel_separation_m)) {
+        if (wheel_separation_m > 0.0) {
+            wheel_separation_ = wheel_separation_m;
+            RCLCPP_INFO(
+                this->get_logger(),
+                "Updated wheel_separation_ to %.6f m",
+                wheel_separation_
+            );
+        }
+        else {
+            RCLCPP_WARN(this->get_logger(), "Ignoring invalid wheel_separation_m %.6f", wheel_separation_m);
+        }
+    }
+
+    if (find_bool("reset_integral", reset_integral) && reset_integral) {
+        send_teensy_config_command("C RESET_I");
+    }
+}
+
+
+rcl_interfaces::msg::SetParametersResult BaseDriverNode::parameters_callback(
+    const std::vector<rclcpp::Parameter> & parameters)
+{
+    rcl_interfaces::msg::SetParametersResult result;
+    result.successful = true;
+    result.reason = "";
+
+    for (const auto & parameter : parameters) {
+        if (parameter.get_name() == "wheel_separation") {
+            const double value = parameter.as_double();
+
+            if (value <= 0.0) {
+                result.successful = false;
+                result.reason = "wheel_separation must be positive";
+                return result;
+            }
+
+            wheel_separation_ = value;
+
+            RCLCPP_INFO(
+                this->get_logger(),
+                "Runtime wheel_separation updated to %.6f m",
+                wheel_separation_
+            );
+        }
+    }
+
+    return result;
 }
 
 void BaseDriverNode::normalize_theta()

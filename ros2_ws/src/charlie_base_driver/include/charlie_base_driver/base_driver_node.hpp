@@ -8,6 +8,7 @@
 #include "geometry_msgs/msg/twist.hpp"
 #include "nav_msgs/msg/odometry.hpp"
 #include "std_msgs/msg/string.hpp"
+#include "rcl_interfaces/msg/set_parameters_result.hpp"
 #include "tf2_ros/transform_broadcaster.h"
 
 #include "charlie_base_driver/serial_port.hpp"
@@ -52,6 +53,16 @@ private:
 
     void normalize_theta();
 
+    void tuning_command_callback(const std_msgs::msg::String::SharedPtr msg);
+    void send_teensy_config_command(const std::string & command);
+    void update_tuning_debug_json(
+        std::ostringstream & json,
+        double kp,
+        double ki,
+        double wheel_radius_m);
+    rcl_interfaces::msg::SetParametersResult parameters_callback(
+        const std::vector<rclcpp::Parameter> & parameters);
+
     // Parameters
     std::string serial_port_name_;
     int baud_rate_;
@@ -75,6 +86,8 @@ private:
     double y_;
     double theta_;
 
+    
+
     // Wheel odom state
     bool received_first_odom_;
     double previous_left_total_m_;
@@ -90,12 +103,19 @@ private:
     SerialPort serial_port_;
     bool serial_connected_;
 
+    // Params
+    double last_kp_;
+    double last_ki_;
+    double last_wheel_radius_m_;
+
     // ROS interfaces
     rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr cmd_vel_sub_;
     rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr odom_pub_;
     rclcpp::Publisher<std_msgs::msg::String>::SharedPtr base_debug_pub_;
     std::unique_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
     rclcpp::TimerBase::SharedPtr control_timer_;
+    rclcpp::Subscription<std_msgs::msg::String>::SharedPtr tuning_command_sub_;
+    OnSetParametersCallbackHandle::SharedPtr parameter_callback_handle_;
 };
 
 }  // namespace charlie_base_driver

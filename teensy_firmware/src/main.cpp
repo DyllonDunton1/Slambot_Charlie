@@ -8,10 +8,10 @@
 
 constexpr uint32_t motor_vel_update_time_us = 10000;
 
-constexpr float wheel_radius = 0.0425f;
-constexpr float circumference = 2.0f * 3.14159265f * wheel_radius;
+float wheel_radius_m = 0.04102f;
+float circumference = 2.0f * 3.14159265f * wheel_radius_m;
 constexpr float ticks_per_rev = 4096.0f;
-constexpr float meters_per_tick = circumference / ticks_per_rev;
+float meters_per_tick = circumference / ticks_per_rev;
 
 constexpr bool left_flip = false;
 constexpr bool right_flip = true;
@@ -85,7 +85,97 @@ uint32_t last_us = 0;
 float dt_s = 0.01f;
 
 
+void handle_config_command(String line)
+{
+    line.trim();
 
+    // Expected:
+    // C KP 0.850
+    // C KI 0.030
+    // C WHEEL_RADIUS 0.0410
+    // C RESET_I
+
+    int first_space = line.indexOf(' ');
+    if (first_space < 0) {
+        Serial.println("ERR BAD_CONFIG");
+        return;
+    }
+
+    String rest = line.substring(first_space + 1);
+    rest.trim();
+
+    int second_space = rest.indexOf(' ');
+
+    String key;
+    String value_str;
+
+    if (second_space < 0) {
+        key = rest;
+        value_str = "";
+    } else {
+        key = rest.substring(0, second_space);
+        value_str = rest.substring(second_space + 1);
+        value_str.trim();
+    }
+
+    key.trim();
+
+    if (key == "KP") {
+        if (value_str.length() == 0) {
+            Serial.println("ERR KP_NO_VALUE");
+            return;
+        }
+
+        left_wheel.kp = value_str.toFloat();
+        right_wheel.kp = value_str.toFloat();
+
+        Serial.print("ACK KP ");
+        Serial.println(left_wheel.kp, 6);
+        return;
+    }
+
+    if (key == "KI") {
+        if (value_str.length() == 0) {
+            Serial.println("ERR KI_NO_VALUE");
+            return;
+        }
+
+        left_wheel.ki = value_str.toFloat();
+        right_wheel.ki = value_str.toFloat();
+
+        Serial.print("ACK KI ");
+        Serial.println(left_wheel.ki, 6);
+        return;
+    }
+
+    if (key == "WHEEL_RADIUS") {
+        if (value_str.length() == 0) {
+            Serial.println("ERR RADIUS_NO_VALUE");
+            return;
+        }
+
+        wheel_radius_m = value_str.toFloat();
+
+        // Recompute anything derived from radius here.
+        // For example:
+        // wheel_circumference_m = 2.0f * PI * wheel_radius_m;
+
+        Serial.print("ACK WHEEL_RADIUS ");
+        Serial.println(wheel_radius_m, 6);
+        return;
+    }
+
+    if (key == "RESET_I") {
+        left_wheel.integral_error = 0.0f;
+        right_wheel.integral_error = 0.0f;
+
+        Serial.println("ACK RESET_I");
+        return;
+    }
+
+    Serial.print("ERR UNKNOWN_CONFIG ");
+    Serial.println(key);
+}
 
 void handle_serial_line(const String &line) {
     if (line.length() == 0) {
@@ -126,6 +216,10 @@ void handle_serial_line(const String &line) {
         last_serial_command_us = micros();
 
         Serial.println("A STOP");
+    }
+    else if (command == 'C') {
+        handle_config_command(line);
+        return;
     }
     else {
         Serial.println("E UNKNOWN_COMMAND");
@@ -170,6 +264,8 @@ void check_serial_timeout() {
     }
 }
 
+
+
 void send_odom_status() {
     uint32_t now_us = micros();
 
@@ -181,16 +277,16 @@ void send_odom_status() {
 
     Serial.print("O ");
 
-    Serial.print(left_odom.delta_to_distance_m(),4);
+    Serial.print(left_odom.delta_to_distance_m(),6);
     Serial.print(" ");
 
-    Serial.print(right_odom.delta_to_distance_m(),4);
+    Serial.print(right_odom.delta_to_distance_m(),6);
     Serial.print(" ");
 
-    Serial.print(left_wheel.current_speed_odom, 3);
+    Serial.print(left_wheel.current_speed_odom, 6);
     Serial.print(" ");
 
-    Serial.print(right_wheel.current_speed_odom, 3);
+    Serial.print(right_wheel.current_speed_odom, 6);
     Serial.print(" ");
 
     Serial.println(status_flags);
@@ -208,34 +304,45 @@ void send_debug_status() {
 
     Serial.print("D ");
 
-    Serial.print(left_wheel.current_speed_target, 3);
+    Serial.print(left_wheel.current_speed_target, 6);
     Serial.print(" ");
 
-    Serial.print(right_wheel.current_speed_target, 3);
+    Serial.print(right_wheel.current_speed_target, 6);
     Serial.print(" ");
 
-    Serial.print(left_wheel.current_speed_odom, 3);
+    Serial.print(left_wheel.current_speed_odom, 6);
     Serial.print(" ");
 
-    Serial.print(right_wheel.current_speed_odom, 3);
+    Serial.print(right_wheel.current_speed_odom, 6);
     Serial.print(" ");
 
-    Serial.print(left_wheel.error, 3);
+    Serial.print(left_wheel.error, 6);
     Serial.print(" ");
 
-    Serial.print(right_wheel.error, 3);
+    Serial.print(right_wheel.error, 6);
     Serial.print(" ");
 
-    Serial.print(left_wheel.integral_error, 3);
+    Serial.print(left_wheel.integral_error, 6);
     Serial.print(" ");
 
-    Serial.print(right_wheel.integral_error, 3);
+    Serial.print(right_wheel.integral_error, 6);
     Serial.print(" ");
 
-    Serial.print(left_wheel.commanded_speed, 3);
+    Serial.print(left_wheel.commanded_speed, 6);
     Serial.print(" ");
 
-    Serial.println(right_wheel.commanded_speed, 3);
+    Serial.print(right_wheel.commanded_speed, 6);
+    Serial.print(" ");
+
+    Serial.print(left_wheel.kp, 6);
+    Serial.print(" ");
+
+    Serial.print(left_wheel.ki, 6);
+    Serial.print(" ");
+
+    Serial.print(wheel_radius_m, 6);
+
+    Serial.println();
 
 
 }

@@ -13,6 +13,9 @@ from cv_bridge import CvBridge
 import rclpy
 from rclpy.node import Node
 
+import tf2_ros
+from tf2_ros import TransformException
+
 from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry, OccupancyGrid
 from sensor_msgs.msg import Image
@@ -29,6 +32,7 @@ class CharlieRosInterface(Node):
         self.declare_parameter("debug_topic", "/base_debug")
         self.declare_parameter("camera_topic", "/camera/image_raw")
         self.declare_parameter("map_topic", "/map")
+        self.declare_parameter("tuning_command_topic", "/base_tuning_command")
 
         # Command behavior
         self.declare_parameter("cmd_publish_rate_hz", 10.0)
@@ -40,13 +44,14 @@ class CharlieRosInterface(Node):
         self.declare_parameter("jpeg_quality", 70)
 
         # Logging behavior
-        self.declare_parameter("max_debug_log_samples", 20000)
+        self.declare_parameter("max_debug_log_samples", 20000)        
 
         self.cmd_vel_topic = self.get_parameter("cmd_vel_topic").value
         self.odom_topic = self.get_parameter("odom_topic").value
         self.debug_topic = self.get_parameter("debug_topic").value
         self.camera_topic = self.get_parameter("camera_topic").value
         self.map_topic = self.get_parameter("map_topic").value
+        self.tuning_command_topic = self.get_parameter("tuning_command_topic").value
 
         self.cmd_publish_rate_hz = float(self.get_parameter("cmd_publish_rate_hz").value)
         self.cmd_timeout_s = float(self.get_parameter("cmd_timeout_s").value)
@@ -105,12 +110,37 @@ class CharlieRosInterface(Node):
         self.latest_jpeg = None
         self.last_camera_time = None
 
+        # Pose State
+        self.robot_pose_state = {
+            "received": False,
+            "frame_id": "map",
+            "child_frame_id": "base_link",
+            "x": 0.0,
+            "y": 0.0,
+            "yaw": 0.0,
+            "yaw_deg": 0.0,
+            "last_update_age_s": None,
+            "error": "",
+        }
+        self.last_robot_pose_time = None
+
         # Publishers
         self.cmd_vel_pub = self.create_publisher(
             Twist,
             self.cmd_vel_topic,
             10,
         )
+
+        self.tuning_pub = self.create_publisher(
+            String,
+            self.tuning_command_topic,
+            10,
+        )
+
+
+        # Transform listeneres
+        self.tf_buffer = tf2_ros.Buffer()
+        self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
 
         # Subscribers
         self.odom_sub = self.create_subscription(
@@ -147,12 +177,18 @@ class CharlieRosInterface(Node):
             self.publish_cmd_vel,
         )
 
+        self.pose_timer = self.create_timer(
+            0.1,
+            self.update_robot_pose_from_tf,
+        )
+
         self.get_logger().info("Charlie web dashboard ROS interface started")
         self.get_logger().info(f"Publishing cmd_vel on {self.cmd_vel_topic}")
         self.get_logger().info(f"Subscribing odom on {self.odom_topic}")
         self.get_logger().info(f"Subscribing debug on {self.debug_topic}")
         self.get_logger().info(f"Subscribing camera on {self.camera_topic}")
         self.get_logger().info(f"Subscribing map on {self.map_topic}")
+        self.get_logger().info(f"Publishing tuning commands on {self.tuning_command_topic}")
 
     def set_manual_command(self, linear_x: float, angular_z: float):
         linear_x = self.clamp(
@@ -445,6 +481,74 @@ class CharlieRosInterface(Node):
     def get_latest_jpeg(self):
         with self.lock:
             return self.latest_jpeg
+    
+    def send_tuning_command(
+        self,
+        kp=None,
+        ki=None,
+        wheel_radius_m=None,
+        wheel_separation_m=None,
+        reset_integral=False,
+    ):
+        command = {}
+
+        if kp is not None:
+            command["kp"] = float(kp)
+
+        if ki is not None:
+            command["ki"] = float(ki)
+
+        if wheel_radius_m is not None:
+            command["wheel_radius_m"] = float(wheel_radius_m)
+
+        if wheel_separation_m is not None:
+            command["wheel_separation_m"] = float(wheel_separation_m)
+
+        if reset_integral:
+            command["reset_integral"] = True
+
+        msg = String()
+        msg.data = json.dumps(command)
+
+        self.tuning_pub.publish(msg)
+
+        return {
+            "ok": True,
+            "command": command,
+            "topic": self.tuning_command_topic,
+        }
+
+    def update_robot_pose_from_tf(self):
+        try:
+            transform = self.tf_buffer.lookup_transform(
+                "map",
+                "base_link",
+                rclpy.time.Time(),
+            )
+
+            t = transform.transform.translation
+            q = transform.transform.rotation
+
+            yaw = self.quaternion_to_yaw(q.x, q.y, q.z, q.w)
+
+            with self.lock:
+                self.last_robot_pose_time = time.monotonic()
+                self.robot_pose_state = {
+                    "received": True,
+                    "frame_id": "map",
+                    "child_frame_id": "base_link",
+                    "x": t.x,
+                    "y": t.y,
+                    "yaw": yaw,
+                    "yaw_deg": math.degrees(yaw),
+                    "last_update_age_s": 0.0,
+                    "error": "",
+                }
+
+        except TransformException as exc:
+            with self.lock:
+                self.robot_pose_state["received"] = False
+                self.robot_pose_state["error"] = str(exc)
 
     def get_status(self):
         now = time.monotonic()
@@ -474,6 +578,11 @@ class CharlieRosInterface(Node):
             debug_log_duration_s = None
             if self.debug_log_start_time is not None:
                 debug_log_duration_s = now - self.debug_log_start_time
+            
+            robot_pose = dict(self.robot_pose_state)
+
+            if self.last_robot_pose_time is not None:
+                robot_pose["last_update_age_s"] = now - self.last_robot_pose_time
 
             status = {
                 "command": {
@@ -504,6 +613,7 @@ class CharlieRosInterface(Node):
                     "last_update_age_s": camera_age,
                 },
                 "map": map_metadata,
+                "robot_pose": robot_pose,
             }
 
             return status

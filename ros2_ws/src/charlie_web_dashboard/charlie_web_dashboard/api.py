@@ -11,6 +11,13 @@ class CmdVelRequest(BaseModel):
     linear_x: float = 0.0
     angular_z: float = 0.0
 
+class TuningRequest(BaseModel):
+    kp: float | None = None
+    ki: float | None = None
+    wheel_radius_m: float | None = None
+    wheel_separation_m: float | None = None
+    reset_integral: bool = False
+
 
 def create_app(ros_interface, package_share_dir: Path) -> FastAPI:
     app = FastAPI(title="Charlie Web Dashboard")
@@ -140,6 +147,16 @@ def create_app(ros_interface, package_share_dir: Path) -> FastAPI:
             headers={
                 "Content-Disposition": f'attachment; filename="{filename}"'
             },
+        )
+
+    @app.post("/api/tuning")
+    def set_tuning(req: TuningRequest):
+        return ros_interface.send_tuning_command(
+            kp=req.kp,
+            ki=req.ki,
+            wheel_radius_m=req.wheel_radius_m,
+            wheel_separation_m=req.wheel_separation_m,
+            reset_integral=req.reset_integral,
         )
 
     return app
