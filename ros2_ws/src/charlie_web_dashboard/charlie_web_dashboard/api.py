@@ -104,4 +104,42 @@ def create_app(ros_interface, package_share_dir: Path) -> FastAPI:
             },
         )
 
+    @app.get("/api/map/image")
+    def map_image():
+        png_bytes = ros_interface.get_latest_map_png()
+
+        if png_bytes is None:
+            return Response(
+                content="No map has been received yet.",
+                status_code=404,
+                media_type="text/plain",
+            )
+
+        return Response(
+            content=png_bytes,
+            media_type="image/png",
+        )
+
+
+    @app.get("/api/map/download")
+    def download_map_png():
+        png_bytes = ros_interface.get_latest_map_png()
+
+        if png_bytes is None:
+            return Response(
+                content="No map has been received yet.",
+                status_code=404,
+                media_type="text/plain",
+            )
+
+        filename = ros_interface.get_map_png_filename()
+
+        return Response(
+            content=png_bytes,
+            media_type="image/png",
+            headers={
+                "Content-Disposition": f'attachment; filename="{filename}"'
+            },
+        )
+
     return app

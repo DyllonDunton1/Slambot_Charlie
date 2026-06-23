@@ -80,7 +80,7 @@ void BaseDriverNode::declare_parameters()
 {
     this->declare_parameter<std::string>("serial_port", "/dev/ttyACM0");
     this->declare_parameter<int>("baud_rate", 115200);
-    this->declare_parameter<double>("wheel_separation", 0.2120);
+    this->declare_parameter<double>("wheel_separation", 0.221);
     this->declare_parameter<double>("cmd_timeout_s", 0.500);
     this->declare_parameter<double>("command_rate_hz", 50.0);
     this->declare_parameter<std::string>("odom_frame", "odom");

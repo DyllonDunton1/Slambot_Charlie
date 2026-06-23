@@ -4,6 +4,7 @@ import json
 import math
 import threading
 import time
+import numpy as np
 from datetime import datetime
 
 import cv2
@@ -13,7 +14,7 @@ import rclpy
 from rclpy.node import Node
 
 from geometry_msgs.msg import Twist
-from nav_msgs.msg import Odometry
+from nav_msgs.msg import Odometry, OccupancyGrid
 from sensor_msgs.msg import Image
 from std_msgs.msg import String
 
@@ -27,6 +28,7 @@ class CharlieRosInterface(Node):
         self.declare_parameter("odom_topic", "/odom")
         self.declare_parameter("debug_topic", "/base_debug")
         self.declare_parameter("camera_topic", "/camera/image_raw")
+        self.declare_parameter("map_topic", "/map")
 
         # Command behavior
         self.declare_parameter("cmd_publish_rate_hz", 10.0)
@@ -44,6 +46,7 @@ class CharlieRosInterface(Node):
         self.odom_topic = self.get_parameter("odom_topic").value
         self.debug_topic = self.get_parameter("debug_topic").value
         self.camera_topic = self.get_parameter("camera_topic").value
+        self.map_topic = self.get_parameter("map_topic").value
 
         self.cmd_publish_rate_hz = float(self.get_parameter("cmd_publish_rate_hz").value)
         self.cmd_timeout_s = float(self.get_parameter("cmd_timeout_s").value)
@@ -70,6 +73,22 @@ class CharlieRosInterface(Node):
             "last_update_age_s": None,
         }
         self.last_odom_time = None
+
+        # Map state
+        self.latest_map_msg = None
+        self.latest_map_png = None
+        self.last_map_time = None
+        self.map_metadata = {
+            "received": False,
+            "topic": self.map_topic,
+            "frame_id": "",
+            "width": 0,
+            "height": 0,
+            "resolution": 0.0,
+            "origin_x": 0.0,
+            "origin_y": 0.0,
+            "last_update_age_s": None,
+        }
 
         # Base debug state
         self.debug_string = "{}"
@@ -101,6 +120,13 @@ class CharlieRosInterface(Node):
             10,
         )
 
+        self.map_sub = self.create_subscription(
+            OccupancyGrid,
+            self.map_topic,
+            self.map_callback,
+            10,
+        )
+
         self.debug_sub = self.create_subscription(
             String,
             self.debug_topic,
@@ -126,6 +152,7 @@ class CharlieRosInterface(Node):
         self.get_logger().info(f"Subscribing odom on {self.odom_topic}")
         self.get_logger().info(f"Subscribing debug on {self.debug_topic}")
         self.get_logger().info(f"Subscribing camera on {self.camera_topic}")
+        self.get_logger().info(f"Subscribing map on {self.map_topic}")
 
     def set_manual_command(self, linear_x: float, angular_z: float):
         linear_x = self.clamp(
@@ -179,6 +206,81 @@ class CharlieRosInterface(Node):
                 "angular_z": msg.twist.twist.angular.z,
                 "last_update_age_s": 0.0,
             }
+    def map_callback(self, msg: OccupancyGrid):
+        now = time.monotonic()
+
+        try:
+            png_bytes = self.occupancy_grid_to_png(msg)
+        except Exception as exc:
+            self.get_logger().warn(f"Map PNG conversion failed: {exc}")
+            return
+
+        with self.lock:
+            self.latest_map_msg = msg
+            self.latest_map_png = png_bytes
+            self.last_map_time = now
+
+            self.map_metadata = {
+                "received": True,
+                "topic": self.map_topic,
+                "frame_id": msg.header.frame_id,
+                "width": msg.info.width,
+                "height": msg.info.height,
+                "resolution": msg.info.resolution,
+                "origin_x": msg.info.origin.position.x,
+                "origin_y": msg.info.origin.position.y,
+                "last_update_age_s": 0.0,
+            }
+
+
+    def occupancy_grid_to_png(self, msg: OccupancyGrid) -> bytes:
+        width = msg.info.width
+        height = msg.info.height
+
+        if width == 0 or height == 0:
+            raise ValueError("Map width or height is zero")
+
+        grid = np.array(msg.data, dtype=np.int16).reshape((height, width))
+
+        # Create grayscale image.
+        # ROS occupancy values:
+        #   -1 = unknown
+        #    0 = free
+        #  100 = occupied
+        image = np.zeros((height, width), dtype=np.uint8)
+
+        # Unknown = medium gray
+        image[grid < 0] = 128
+
+        # Free = white
+        image[grid == 0] = 255
+
+        # Occupied = black
+        image[grid > 50] = 0
+
+        # Semi-occupied/probability cells = gradient
+        uncertain_mask = (grid > 0) & (grid <= 50)
+        image[uncertain_mask] = 255 - (grid[uncertain_mask] * 2).astype(np.uint8)
+
+        # ROS map origin is bottom-left-ish; image origin is top-left.
+        image = np.flipud(image)
+
+        success, encoded = cv2.imencode(".png", image)
+
+        if not success:
+            raise RuntimeError("cv2.imencode failed for map PNG")
+
+        return encoded.tobytes()
+
+
+    def get_latest_map_png(self):
+        with self.lock:
+            return self.latest_map_png
+
+
+    def get_map_png_filename(self):
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        return f"charlie_map_{timestamp}.png"
 
     def debug_callback(self, msg: String):
         now = time.monotonic()
@@ -363,6 +465,11 @@ class CharlieRosInterface(Node):
 
             if self.last_camera_time is not None:
                 camera_age = now - self.last_camera_time
+            
+            map_metadata = dict(self.map_metadata)
+
+            if self.last_map_time is not None:
+                map_metadata["last_update_age_s"] = now - self.last_map_time
 
             debug_log_duration_s = None
             if self.debug_log_start_time is not None:
@@ -396,6 +503,7 @@ class CharlieRosInterface(Node):
                     "topic": self.camera_topic,
                     "last_update_age_s": camera_age,
                 },
+                "map": map_metadata,
             }
 
             return status

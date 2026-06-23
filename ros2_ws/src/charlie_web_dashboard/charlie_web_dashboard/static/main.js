@@ -13,6 +13,10 @@ const statusReadout = document.getElementById("status-readout");
 
 const logStatus = document.getElementById("log-status");
 
+const mapImage = document.getElementById("map-image");
+const mapStatus = document.getElementById("map-status");
+const downloadMapButton = document.getElementById("download-map");
+
 
 function linearSpeed() {
     return parseFloat(linearSlider.value);
@@ -29,6 +33,8 @@ function updateSliderReadouts() {
 
 linearSlider.addEventListener("input", updateSliderReadouts);
 angularSlider.addEventListener("input", updateSliderReadouts);
+
+downloadMapButton.addEventListener("click", downloadMapPng);
 
 function bindClick(id, handler) {
     const element = document.getElementById(id);
@@ -71,6 +77,29 @@ function computeCommand() {
     angular = Math.max(-angularSpeed(), Math.min(angularSpeed(), angular));
 
     return { linear_x: linear, angular_z: angular };
+}
+
+function setMapStatus(text, mode = "normal") {
+    mapStatus.textContent = text;
+
+    mapStatus.classList.remove("active");
+    mapStatus.classList.remove("error");
+
+    if (mode === "active") {
+        mapStatus.classList.add("active");
+    }
+
+    if (mode === "error") {
+        mapStatus.classList.add("error");
+    }
+}
+
+function refreshMapImage() {
+    if (!mapImage) {
+        return;
+    }
+
+    mapImage.src = `/api/map/image?t=${Date.now()}`;
 }
 
 async function sendCommand(command) {
@@ -125,6 +154,22 @@ async function updateStatus() {
                 );
             } else {
                 setLogStatus("Log: idle");
+            }
+        }
+
+        if (status.map) {
+            if (status.map.received) {
+                const age = status.map.last_update_age_s ?? 0.0;
+                const width = status.map.width ?? 0;
+                const height = status.map.height ?? 0;
+                const resolution = status.map.resolution ?? 0.0;
+
+                setMapStatus(
+                    `Map: received | ${width} x ${height} | ${resolution.toFixed(3)} m/cell | age ${age.toFixed(1)} s`,
+                    "active"
+                );
+            } else {
+                setMapStatus("Map: waiting");
             }
         }
     } catch (error) {
@@ -258,6 +303,47 @@ async function downloadDebugLog() {
     }
 }
 
+async function downloadMapPng() {
+    try {
+        setMapStatus("Map: preparing download...");
+
+        const response = await fetch("/api/map/download");
+
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
+        }
+
+        const blob = await response.blob();
+
+        let filename = "charlie_map.png";
+        const disposition = response.headers.get("Content-Disposition");
+
+        if (disposition) {
+            const match = disposition.match(/filename="(.+)"/);
+            if (match && match[1]) {
+                filename = match[1];
+            }
+        }
+
+        const url = window.URL.createObjectURL(blob);
+        const link = document.createElement("a");
+
+        link.href = url;
+        link.download = filename;
+
+        document.body.appendChild(link);
+        link.click();
+
+        document.body.removeChild(link);
+        window.URL.revokeObjectURL(url);
+
+        setMapStatus(`Map: downloaded ${filename}`, "active");
+    } catch (error) {
+        console.error("Failed to download map PNG", error);
+        setMapStatus("Map: download failed", "error");
+    }
+}
+
 function bindHoldButton(id, linearValue, angularValue) {
     const button = document.getElementById(id);
 
@@ -306,6 +392,8 @@ setInterval(() => {
 }, 100);
 
 setInterval(updateStatus, 250);
+setInterval(refreshMapImage, 1000);
 
 updateSliderReadouts();
 updateStatus();
+refreshMapImage();
