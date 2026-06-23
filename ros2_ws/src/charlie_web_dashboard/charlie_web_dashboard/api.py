@@ -18,6 +18,9 @@ class TuningRequest(BaseModel):
     wheel_separation_m: float | None = None
     reset_integral: bool = False
 
+class CheckpointLoadRequest(BaseModel):
+    name: str | None = None
+
 
 def create_app(ros_interface, package_share_dir: Path) -> FastAPI:
     app = FastAPI(title="Charlie Web Dashboard")
@@ -158,5 +161,30 @@ def create_app(ros_interface, package_share_dir: Path) -> FastAPI:
             wheel_separation_m=req.wheel_separation_m,
             reset_integral=req.reset_integral,
         )
+    
+    @app.post("/api/checkpoint/save")
+    def save_checkpoint():
+        return ros_interface.save_mapping_checkpoint()
+
+
+    @app.post("/api/checkpoint/load_latest")
+    def load_latest_checkpoint():
+        return ros_interface.load_latest_mapping_checkpoint()
+
+
+    @app.post("/api/checkpoint/load")
+    def load_checkpoint(req: CheckpointLoadRequest):
+        if req.name is None or req.name.strip() == "":
+            return ros_interface.load_latest_mapping_checkpoint()
+
+        return ros_interface.load_mapping_checkpoint(req.name.strip())
+
+
+    @app.get("/api/checkpoint/list")
+    def list_checkpoints():
+        return {
+            "ok": True,
+            "checkpoints": ros_interface.get_checkpoint_list(),
+        }
 
     return app

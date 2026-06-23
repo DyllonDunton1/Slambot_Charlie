@@ -278,6 +278,46 @@ pre {
     border-color: #7a2d2d;
 }
 
+.checkpoint-panel {
+    margin-top: 16px;
+    padding-top: 12px;
+    border-top: 1px solid #333;
+}
+
+.checkpoint-panel h3 {
+    margin-top: 0;
+}
+
+.checkpoint-buttons {
+    display: flex;
+    gap: 8px;
+    margin-top: 8px;
+}
+
+.checkpoint-buttons button {
+    padding: 8px 10px;
+}
+
+.checkpoint-status {
+    margin-top: 8px;
+    padding: 8px 10px;
+    border-radius: 8px;
+    background: #101010;
+    border: 1px solid #333;
+    color: #ccc;
+    font-family: monospace;
+}
+
+.checkpoint-status.active {
+    color: #9cff9c;
+    border-color: #2d6a2d;
+}
+
+.checkpoint-status.error {
+    color: #ff9c9c;
+    border-color: #7a2d2d;
+}
+
 @media (max-width: 800px) {
     .dashboard {
         height: auto;

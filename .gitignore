@@ -30,3 +30,6 @@ Thumbs.db
 *.bag
 *.db3
 rosbag2_*/
+
+# Checkpointing
+runtime/*

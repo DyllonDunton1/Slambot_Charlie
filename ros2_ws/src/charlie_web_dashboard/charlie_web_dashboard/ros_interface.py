@@ -5,6 +5,7 @@ import math
 import threading
 import time
 import numpy as np
+from pathlib import Path
 from datetime import datetime
 
 import cv2
@@ -16,10 +17,11 @@ from rclpy.node import Node
 import tf2_ros
 from tf2_ros import TransformException
 
-from geometry_msgs.msg import Twist
+from geometry_msgs.msg import Twist, Pose2D
 from nav_msgs.msg import Odometry, OccupancyGrid
 from sensor_msgs.msg import Image
 from std_msgs.msg import String
+from slam_toolbox.srv import SerializePoseGraph, DeserializePoseGraph
 
 
 class CharlieRosInterface(Node):
@@ -124,6 +126,28 @@ class CharlieRosInterface(Node):
         }
         self.last_robot_pose_time = None
 
+        # Mapping checkpoint state
+        self.checkpoint_root = Path.home() / "Slambot_Charlie" / "runtime" / "checkpoints"
+        self.checkpoint_root.mkdir(parents=True, exist_ok=True)
+
+        self.last_checkpoint_status = {
+            "ok": False,
+            "message": "No checkpoint action yet.",
+            "latest_checkpoint": None,
+            "checkpoint_root": str(self.checkpoint_root),
+        }
+
+        self.serialize_map_client = self.create_client(
+            SerializePoseGraph,
+            "/slam_toolbox/serialize_map",
+        )
+
+        self.deserialize_map_client = self.create_client(
+            DeserializePoseGraph,
+            "/slam_toolbox/deserialize_map",
+        )
+
+
         # Publishers
         self.cmd_vel_pub = self.create_publisher(
             Twist,
@@ -189,6 +213,10 @@ class CharlieRosInterface(Node):
         self.get_logger().info(f"Subscribing camera on {self.camera_topic}")
         self.get_logger().info(f"Subscribing map on {self.map_topic}")
         self.get_logger().info(f"Publishing tuning commands on {self.tuning_command_topic}")
+        self.get_logger().info("Mapping checkpoint services configured")
+        self.get_logger().info("serialize_map service: /slam_toolbox/serialize_map")
+        self.get_logger().info("deserialize_map service: /slam_toolbox/deserialize_map")
+        self.get_logger().info(f"Checkpoint root: {self.checkpoint_root}")
 
     def set_manual_command(self, linear_x: float, angular_z: float):
         linear_x = self.clamp(
@@ -550,6 +578,345 @@ class CharlieRosInterface(Node):
                 self.robot_pose_state["received"] = False
                 self.robot_pose_state["error"] = str(exc)
 
+    def wait_for_service(self, client, service_name: str, timeout_s: float = 2.0) -> bool:
+        start = time.monotonic()
+
+        while time.monotonic() - start < timeout_s:
+            if client.service_is_ready():
+                return True
+
+            client.wait_for_service(timeout_sec=0.1)
+
+        self.get_logger().warn(f"Service not available: {service_name}")
+        return False
+
+
+    def wait_for_future(self, future, timeout_s: float = 10.0):
+        start = time.monotonic()
+
+        while time.monotonic() - start < timeout_s:
+            if future.done():
+                return future.result()
+
+            time.sleep(0.05)
+
+        raise TimeoutError("Service call timed out")
+
+
+    def get_latest_checkpoint_dir(self):
+        if not self.checkpoint_root.exists():
+            return None
+
+        checkpoint_dirs = [
+            path for path in self.checkpoint_root.iterdir()
+            if path.is_dir() and path.name.startswith("checkpoint_")
+        ]
+
+        if not checkpoint_dirs:
+            return None
+
+        return sorted(checkpoint_dirs, key=lambda p: p.name)[-1]
+
+
+    def get_checkpoint_list(self):
+        if not self.checkpoint_root.exists():
+            return []
+
+        checkpoints = []
+
+        for path in sorted(self.checkpoint_root.iterdir(), key=lambda p: p.name):
+            if not path.is_dir() or not path.name.startswith("checkpoint_"):
+                continue
+
+            metadata_path = path / f"{path.name}.json"
+
+            item = {
+                "name": path.name,
+                "directory": str(path),
+                "metadata_path": str(metadata_path),
+                "has_metadata": metadata_path.exists(),
+            }
+
+            if metadata_path.exists():
+                try:
+                    item["metadata"] = json.loads(metadata_path.read_text())
+                except Exception as exc:
+                    item["metadata_error"] = str(exc)
+
+            checkpoints.append(item)
+
+        return checkpoints
+
+
+    def save_mapping_checkpoint(self):
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        checkpoint_name = f"checkpoint_{timestamp}"
+
+        checkpoint_dir = self.checkpoint_root / checkpoint_name
+        checkpoint_dir.mkdir(parents=True, exist_ok=True)
+
+        posegraph_base_path = checkpoint_dir / checkpoint_name
+        metadata_path = checkpoint_dir / f"{checkpoint_name}.json"
+
+        with self.lock:
+            robot_pose = dict(self.robot_pose_state)
+            odom_pose = dict(self.odom_state)
+
+        if not robot_pose.get("received", False):
+            result = {
+                "ok": False,
+                "message": "Cannot save checkpoint because map->base_link pose is not available.",
+                "checkpoint": checkpoint_name,
+            }
+            self.last_checkpoint_status = {
+                "ok": False,
+                "message": result["message"],
+                "latest_checkpoint": None,
+                "checkpoint_root": str(self.checkpoint_root),
+            }
+            return result
+
+        if not self.wait_for_service(
+            self.serialize_map_client,
+            "/slam_toolbox/serialize_map",
+            timeout_s=3.0,
+        ):
+            result = {
+                "ok": False,
+                "message": "slam_toolbox serialize_map service is not available.",
+                "checkpoint": checkpoint_name,
+            }
+            self.last_checkpoint_status = {
+                "ok": False,
+                "message": result["message"],
+                "latest_checkpoint": None,
+                "checkpoint_root": str(self.checkpoint_root),
+            }
+            return result
+
+        request = SerializePoseGraph.Request()
+        request.filename = str(posegraph_base_path)
+
+        try:
+            future = self.serialize_map_client.call_async(request)
+            response = self.wait_for_future(future, timeout_s=15.0)
+        except Exception as exc:
+            result = {
+                "ok": False,
+                "message": f"serialize_map failed: {exc}",
+                "checkpoint": checkpoint_name,
+            }
+            self.last_checkpoint_status = {
+                "ok": False,
+                "message": result["message"],
+                "latest_checkpoint": None,
+                "checkpoint_root": str(self.checkpoint_root),
+            }
+            return result
+
+        # SerializePoseGraph result code:
+        # 0 = success, 255 = failed to write file
+        serialize_result = getattr(response, "result", None)
+
+        if serialize_result != SerializePoseGraph.Response.RESULT_SUCCESS:
+            result = {
+                "ok": False,
+                "message": f"serialize_map returned non-success result: {serialize_result}",
+                "checkpoint": checkpoint_name,
+                "posegraph_base_path": str(posegraph_base_path),
+            }
+            self.last_checkpoint_status = {
+                "ok": False,
+                "message": result["message"],
+                "latest_checkpoint": None,
+                "checkpoint_root": str(self.checkpoint_root),
+            }
+            return result
+
+        metadata = {
+            "name": checkpoint_name,
+            "created_at": datetime.now().isoformat(),
+            "checkpoint_dir": str(checkpoint_dir),
+            "posegraph_base_path": str(posegraph_base_path),
+            "metadata_path": str(metadata_path),
+            "saved_map_pose": {
+                "frame_id": "map",
+                "child_frame_id": "base_link",
+                "x": robot_pose.get("x", 0.0),
+                "y": robot_pose.get("y", 0.0),
+                "yaw": robot_pose.get("yaw", 0.0),
+                "yaw_deg": robot_pose.get("yaw_deg", 0.0),
+            },
+            "saved_odom_pose": {
+                "frame_id": "odom",
+                "child_frame_id": "base_link",
+                "x": odom_pose.get("x", 0.0),
+                "y": odom_pose.get("y", 0.0),
+                "yaw": odom_pose.get("yaw", 0.0),
+                "linear_x": odom_pose.get("linear_x", 0.0),
+                "angular_z": odom_pose.get("angular_z", 0.0),
+            },
+            "note": "Load this checkpoint only if Charlie has not physically moved since saving.",
+        }
+
+        metadata_path.write_text(json.dumps(metadata, indent=2))
+
+        result = {
+            "ok": True,
+            "message": "Mapping checkpoint saved.",
+            "checkpoint": checkpoint_name,
+            "checkpoint_dir": str(checkpoint_dir),
+            "posegraph_base_path": str(posegraph_base_path),
+            "metadata_path": str(metadata_path),
+            "serialize_result": serialize_result,
+            "metadata": metadata,
+        }
+
+        self.last_checkpoint_status = {
+            "ok": True,
+            "message": result["message"],
+            "latest_checkpoint": checkpoint_name,
+            "checkpoint_root": str(self.checkpoint_root),
+        }
+
+        return result
+
+
+    def load_latest_mapping_checkpoint(self):
+        checkpoint_dir = self.get_latest_checkpoint_dir()
+
+        if checkpoint_dir is None:
+            result = {
+                "ok": False,
+                "message": "No mapping checkpoints found.",
+                "checkpoint_root": str(self.checkpoint_root),
+            }
+            self.last_checkpoint_status = {
+                "ok": False,
+                "message": result["message"],
+                "latest_checkpoint": None,
+                "checkpoint_root": str(self.checkpoint_root),
+            }
+            return result
+
+        return self.load_mapping_checkpoint(checkpoint_dir.name)
+
+
+    def load_mapping_checkpoint(self, checkpoint_name: str):
+        checkpoint_dir = self.checkpoint_root / checkpoint_name
+        metadata_path = checkpoint_dir / f"{checkpoint_name}.json"
+
+        if not metadata_path.exists():
+            result = {
+                "ok": False,
+                "message": f"Checkpoint metadata not found: {metadata_path}",
+                "checkpoint": checkpoint_name,
+            }
+            self.last_checkpoint_status = {
+                "ok": False,
+                "message": result["message"],
+                "latest_checkpoint": checkpoint_name,
+                "checkpoint_root": str(self.checkpoint_root),
+            }
+            return result
+
+        try:
+            metadata = json.loads(metadata_path.read_text())
+        except Exception as exc:
+            result = {
+                "ok": False,
+                "message": f"Failed to read checkpoint metadata: {exc}",
+                "checkpoint": checkpoint_name,
+            }
+            self.last_checkpoint_status = {
+                "ok": False,
+                "message": result["message"],
+                "latest_checkpoint": checkpoint_name,
+                "checkpoint_root": str(self.checkpoint_root),
+            }
+            return result
+
+        posegraph_base_path = metadata["posegraph_base_path"]
+        saved_pose = metadata["saved_map_pose"]
+
+        if not self.wait_for_service(
+            self.deserialize_map_client,
+            "/slam_toolbox/deserialize_map",
+            timeout_s=3.0,
+        ):
+            result = {
+                "ok": False,
+                "message": "slam_toolbox deserialize_map service is not available.",
+                "checkpoint": checkpoint_name,
+            }
+            self.last_checkpoint_status = {
+                "ok": False,
+                "message": result["message"],
+                "latest_checkpoint": checkpoint_name,
+                "checkpoint_root": str(self.checkpoint_root),
+            }
+            return result
+
+        initial_pose = Pose2D()
+        initial_pose.x = float(saved_pose["x"])
+        initial_pose.y = float(saved_pose["y"])
+        initial_pose.theta = float(saved_pose["yaw"])
+
+        request = DeserializePoseGraph.Request()
+        request.filename = posegraph_base_path
+
+        # slam_toolbox/srv/DeserializePoseGraph:
+        # START_AT_GIVEN_POSE = 2
+        request.match_type = 2
+        request.initial_pose = initial_pose
+
+        try:
+            future = self.deserialize_map_client.call_async(request)
+            response = self.wait_for_future(future, timeout_s=15.0)
+        except Exception as exc:
+            result = {
+                "ok": False,
+                "message": f"deserialize_map failed: {exc}",
+                "checkpoint": checkpoint_name,
+            }
+            self.last_checkpoint_status = {
+                "ok": False,
+                "message": result["message"],
+                "latest_checkpoint": checkpoint_name,
+                "checkpoint_root": str(self.checkpoint_root),
+            }
+            return result
+
+        deserialize_result = getattr(response, "result", None)
+
+        # Some versions define result codes; keep this tolerant.
+        success = deserialize_result in (None, 0)
+
+        result = {
+            "ok": success,
+            "message": "Mapping checkpoint loaded." if success else f"deserialize_map returned result: {deserialize_result}",
+            "checkpoint": checkpoint_name,
+            "checkpoint_dir": str(checkpoint_dir),
+            "posegraph_base_path": posegraph_base_path,
+            "metadata_path": str(metadata_path),
+            "deserialize_result": deserialize_result,
+            "initial_pose": {
+                "x": initial_pose.x,
+                "y": initial_pose.y,
+                "theta": initial_pose.theta,
+            },
+            "metadata": metadata,
+        }
+
+        self.last_checkpoint_status = {
+            "ok": success,
+            "message": result["message"],
+            "latest_checkpoint": checkpoint_name,
+            "checkpoint_root": str(self.checkpoint_root),
+        }
+
+        return result
+
     def get_status(self):
         now = time.monotonic()
 
@@ -614,6 +981,7 @@ class CharlieRosInterface(Node):
                 },
                 "map": map_metadata,
                 "robot_pose": robot_pose,
+                "checkpoint": dict(self.last_checkpoint_status),
             }
 
             return status

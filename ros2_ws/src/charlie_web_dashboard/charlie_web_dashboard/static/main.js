@@ -30,6 +30,10 @@ const tuningStatus = document.getElementById("tuning-status");
 const poseStatus = document.getElementById("pose-status");
 const robotMarker = document.getElementById("robot-marker");
 
+const saveCheckpointButton = document.getElementById("save-checkpoint");
+const loadLatestCheckpointButton = document.getElementById("load-latest-checkpoint");
+const checkpointStatus = document.getElementById("checkpoint-status");
+
 
 function linearSpeed() {
     return parseFloat(linearSlider.value);
@@ -52,6 +56,9 @@ downloadMapButton.addEventListener("click", downloadMapPng);
 applyTuningButton.addEventListener("click", applyTuning);
 resetIntegralButton.addEventListener("click", resetIntegral);
 
+saveCheckpointButton.addEventListener("click", saveCheckpoint);
+loadLatestCheckpointButton.addEventListener("click", loadLatestCheckpoint);
+
 function bindClick(id, handler) {
     const element = document.getElementById(id);
 
@@ -69,6 +76,75 @@ bindClick("stop-log", stopDebugLog);
 bindClick("clear-log", clearDebugLog);
 bindClick("download-log", downloadDebugLog);
 
+function setCheckpointStatus(text, mode = "normal") {
+    checkpointStatus.textContent = text;
+
+    checkpointStatus.classList.remove("active");
+    checkpointStatus.classList.remove("error");
+
+    if (mode === "active") {
+        checkpointStatus.classList.add("active");
+    }
+
+    if (mode === "error") {
+        checkpointStatus.classList.add("error");
+    }
+}
+
+
+async function saveCheckpoint() {
+    try {
+        setCheckpointStatus("Checkpoint: saving...");
+
+        const response = await fetch("/api/checkpoint/save", {
+            method: "POST",
+        });
+
+        const data = await response.json();
+
+        if (!response.ok || !data.ok) {
+            throw new Error(data.message || `HTTP ${response.status}`);
+        }
+
+        setCheckpointStatus(
+            `Checkpoint: saved ${data.checkpoint}`,
+            "active"
+        );
+
+        await updateStatus();
+    } catch (error) {
+        console.error("Failed to save checkpoint", error);
+        setCheckpointStatus(`Checkpoint: save failed | ${error.message}`, "error");
+    }
+}
+
+
+async function loadLatestCheckpoint() {
+    try {
+        setCheckpointStatus("Checkpoint: loading latest...");
+
+        const response = await fetch("/api/checkpoint/load_latest", {
+            method: "POST",
+        });
+
+        const data = await response.json();
+
+        if (!response.ok || !data.ok) {
+            throw new Error(data.message || `HTTP ${response.status}`);
+        }
+
+        setCheckpointStatus(
+            `Checkpoint: loaded ${data.checkpoint}`,
+            "active"
+        );
+
+        await updateStatus();
+    } catch (error) {
+        console.error("Failed to load checkpoint", error);
+        setCheckpointStatus(`Checkpoint: load failed | ${error.message}`, "error");
+    }
+}
+
 function setPoseStatus(text, mode = "normal") {
     poseStatus.textContent = text;
 
@@ -83,6 +159,47 @@ function setPoseStatus(text, mode = "normal") {
         poseStatus.classList.add("error");
     }
 }
+
+function getContainedImageRect(imgElement) {
+    const elementRect = imgElement.getBoundingClientRect();
+
+    const naturalWidth = imgElement.naturalWidth;
+    const naturalHeight = imgElement.naturalHeight;
+
+    if (naturalWidth <= 0 || naturalHeight <= 0) {
+        return elementRect;
+    }
+
+    const elementAspect = elementRect.width / elementRect.height;
+    const imageAspect = naturalWidth / naturalHeight;
+
+    let displayedWidth;
+    let displayedHeight;
+    let offsetX;
+    let offsetY;
+
+    if (imageAspect > elementAspect) {
+        // Image is limited by width.
+        displayedWidth = elementRect.width;
+        displayedHeight = displayedWidth / imageAspect;
+        offsetX = 0;
+        offsetY = (elementRect.height - displayedHeight) / 2.0;
+    } else {
+        // Image is limited by height.
+        displayedHeight = elementRect.height;
+        displayedWidth = displayedHeight * imageAspect;
+        offsetX = (elementRect.width - displayedWidth) / 2.0;
+        offsetY = 0;
+    }
+
+    return {
+        left: elementRect.left + offsetX,
+        top: elementRect.top + offsetY,
+        width: displayedWidth,
+        height: displayedHeight,
+    };
+}
+
 
 function updateRobotMarker(status) {
     if (!status.map || !status.robot_pose) {
@@ -106,7 +223,7 @@ function updateRobotMarker(status) {
         return;
     }
 
-    const mapImageRect = mapImage.getBoundingClientRect();
+    const imageContentRect = getContainedImageRect(mapImage);
     const containerRect = mapImage.parentElement.getBoundingClientRect();
 
     const mapWidthCells = map.width;
@@ -124,27 +241,25 @@ function updateRobotMarker(status) {
     const cellX = (pose.x - originX) / resolution;
     const cellY = (pose.y - originY) / resolution;
 
+    // The map PNG is flipped vertically in the backend with np.flipud(image),
+    // so convert map cell y to image y.
     const imagePixelX = cellX;
     const imagePixelY = mapHeightCells - cellY;
 
-    const displayedImageWidth = mapImageRect.width;
-    const displayedImageHeight = mapImageRect.height;
+    const screenX = imageContentRect.left - containerRect.left
+        + (imagePixelX / mapWidthCells) * imageContentRect.width;
 
-    const screenX = mapImageRect.left - containerRect.left
-        + (imagePixelX / mapWidthCells) * displayedImageWidth;
-
-    const screenY = mapImageRect.top - containerRect.top
-        + (imagePixelY / mapHeightCells) * displayedImageHeight;
+    const screenY = imageContentRect.top - containerRect.top
+        + (imagePixelY / mapHeightCells) * imageContentRect.height;
 
     robotMarker.style.display = "block";
     robotMarker.style.left = `${screenX}px`;
     robotMarker.style.top = `${screenY}px`;
 
-    // CSS screen coordinates have y downward.
-    // Negative yaw usually gives the expected visual rotation after vertical map flip.
     const yawDegForScreen = -pose.yaw_deg;
 
-    robotMarker.style.transform = `translate(-50%, -50%) rotate(${yawDegForScreen}deg)`;
+    robotMarker.style.transform =
+        `translate(-50%, -50%) rotate(${yawDegForScreen}deg)`;
 
     const age = pose.last_update_age_s ?? 0.0;
 
@@ -299,6 +414,20 @@ async function updateStatus() {
         const response = await fetch("/api/status");
         const status = await response.json();
         statusReadout.textContent = JSON.stringify(status, null, 2);
+
+        if (status.checkpoint && status.checkpoint.message) {
+            if (status.checkpoint.ok) {
+                setCheckpointStatus(
+                    `Checkpoint: ${status.checkpoint.message} | latest: ${status.checkpoint.latest_checkpoint}`,
+                    "active"
+                );
+            } else {
+                setCheckpointStatus(
+                    `Checkpoint: ${status.checkpoint.message}`,
+                    "normal"
+                );
+            }
+        }
 
         if (!tuningFieldsPopulated && status.debug && status.debug.data) {
             const debug = status.debug.data;

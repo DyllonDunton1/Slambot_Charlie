@@ -7,6 +7,8 @@ from launch_ros.substitutions import FindPackageShare
 
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 
+from launch.conditions import IfCondition
+
 
 def generate_launch_description():
     serial_port = LaunchConfiguration("serial_port")
@@ -18,6 +20,8 @@ def generate_launch_description():
 
     lidar_port = LaunchConfiguration("lidar_port")
 
+    mapping = LaunchConfiguration("mapping")
+
     web_dashboard_camera_launch = PathJoinSubstitution([
         FindPackageShare("charlie_web_dashboard"),
         "launch",
@@ -28,6 +32,12 @@ def generate_launch_description():
         FindPackageShare("charlie_description"),
         "launch",
         "description.launch.py",
+    ])
+
+    mapping_launch = PathJoinSubstitution([
+        FindPackageShare("charlie_navigation"),
+        "launch",
+        "mapping.launch.py",
     ])
 
     return LaunchDescription([
@@ -65,6 +75,12 @@ def generate_launch_description():
             "lidar_port",
             default_value="/dev/serial/by-id/usb-Silicon_Labs_CP2102_USB_to_UART_Bridge_Controller_0001-if00-port0",
             description="Serial port for the ROBOTIS LDS LiDAR",
+        ),
+
+        DeclareLaunchArgument(
+            "mapping",
+            default_value="true",
+            description="Start slam_toolbox mapping",
         ),
 
         Node(
@@ -105,5 +121,10 @@ def generate_launch_description():
 
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(description_launch),
+        ),
+        
+        IncludeLaunchDescription(
+            PythonLaunchDescriptionSource(mapping_launch),
+            condition=IfCondition(mapping),
         ),
     ])
