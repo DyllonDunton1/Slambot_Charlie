@@ -87,11 +87,21 @@ robot_localization -> /odometry/filtered and odom -> base_link
 slam_toolbox     -> uses fused odom/TF
 ```
 
+## Architecture diagrams
+
+The simplified architecture diagrams are intended for the portfolio page and quick repository orientation:
+
+- [Hardware Architecture](architecture/hardware_architecture.md)
+- [Software Architecture](architecture/software_architecture.md)
+
 ## Repository layout
 
 ```text
 Slambot_Charlie/
 ├── README.md
+├── architecture/
+│   ├── hardware_architecture.md
+│   └── software_architecture.md
 ├── ros2_ws/
 │   └── src/
 │       ├── charlie_bringup/
