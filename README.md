@@ -93,158 +93,11 @@ These simplified diagrams are intended for portfolio presentation and quick repo
 
 ### Hardware Architecture
 
-```mermaid
----
-config:
-  theme: base
-  themeVariables:
-    background: '#ffffff'
-    mainBkg: '#ffffff'
-    primaryColor: '#ffffff'
-    primaryTextColor: '#000000'
-    primaryBorderColor: '#000000'
-    clusterBkg: '#ffffff'
-    clusterBorder: '#000000'
-    lineColor: '#000000'
-    edgeLabelBackground: '#ffffff'
-    fontFamily: ''
-  flowchart:
-    curve: linear
-    htmlLabels: true
-    nodeSpacing: 55
-    rankSpacing: 70
-  layout: fixed
----
-flowchart LR
-
-    subgraph CANVAS[Architecture Canvas]
-        direction LR
-
-        subgraph POWER[Power System]
-            direction TB
-            BAT[Battery]
-            V5[5V Line]
-            V12[12V Line]
-            BAT --> V5
-            BAT --> V12
-        end
-
-        subgraph RPI[Raspberry Pi Hardware]
-            direction TB
-            PI[Raspberry Pi 4B]
-            LIDAR[LiDAR]
-            CAMERA[USB Camera]
-            IMU[IMU]
-            LIDAR --> PI
-            CAMERA --> PI
-            IMU --> PI
-        end
-
-        USB[USB Power + Serial Data]
-
-        subgraph MCU[Teensy Hardware]
-            direction TB
-            TEENSY[Teensy 4.1]
-            ENCODER[Wheel Encoders]
-            ENCODER --> TEENSY
-        end
-
-        subgraph DRIVE[Drive Hardware]
-            direction TB
-            DRIVER[Stepper Drivers]
-            MOTOR[Stepper Motors]
-            DRIVER --> MOTOR
-        end
-
-        V5 --> PI
-        V12 --> DRIVER
-        PI --> USB
-        USB --> TEENSY
-        TEENSY --> DRIVER
-    end
-
-    classDef block fill:#ffffff,stroke:#000000,color:#000000,stroke-width:1.6px;
-    class BAT,V5,V12,PI,LIDAR,CAMERA,IMU,USB,TEENSY,ENCODER,DRIVER,MOTOR block;
-
-    style CANVAS fill:#ffffff,stroke:#ffffff,color:#000000
-    style POWER fill:#ffffff,stroke:#000000,color:#000000,stroke-width:1.6px
-    style RPI fill:#ffffff,stroke:#000000,color:#000000,stroke-width:1.6px
-    style MCU fill:#ffffff,stroke:#000000,color:#000000,stroke-width:1.6px
-    style DRIVE fill:#ffffff,stroke:#000000,color:#000000,stroke-width:1.6px
-```
+![Hardware Architecture](architecture/hardware_architecture.png)
 
 ### Software Architecture
 
-```mermaid
----
-config:
-  theme: base
-  themeVariables:
-    background: '#ffffff'
-    mainBkg: '#ffffff'
-    primaryColor: '#ffffff'
-    primaryTextColor: '#000000'
-    primaryBorderColor: '#000000'
-    clusterBkg: '#ffffff'
-    clusterBorder: '#000000'
-    lineColor: '#000000'
-    edgeLabelBackground: '#ffffff'
-    fontFamily: ''
-  flowchart:
-    curve: linear
-    htmlLabels: true
-    nodeSpacing: 45
-    rankSpacing: 60
-  layout: fixed
----
-flowchart LR
-
-    subgraph CANVAS[Software Architecture]
-        direction LR
-
-        CTRL[Laptop / Phone]
-        NET[Tailnet]
-
-        subgraph RPI[Raspberry Pi Software Stack]
-            direction TB
-            DASH[Web Dashboard]
-            ROS[ROS 2 Runtime]
-            BASE[Base Driver]
-            SLAM[SLAM]
-            LIDAR[LiDAR Driver]
-            CAMERA[Camera Driver]
-            TF[Robot Model / TF]
-        end
-
-        subgraph MCU[Teensy Firmware Stack]
-            direction TB
-            SERIAL[USB Serial]
-            MOTOR[Motor Control]
-            ENCODER[Encoder Processing]
-        end
-
-        CTRL --> NET
-        NET --> DASH
-
-        DASH --> ROS
-        ROS --> BASE
-        ROS --> SLAM
-        LIDAR --> SLAM
-        CAMERA --> DASH
-        TF --> SLAM
-
-        BASE --> SERIAL
-        SERIAL --> MOTOR
-        ENCODER --> MOTOR
-    end
-
-    classDef block fill:#ffffff,stroke:#000000,color:#000000,stroke-width:1.6px;
-    class CTRL,NET,DASH,ROS,BASE,SLAM,LIDAR,CAMERA,TF,SERIAL,MOTOR,ENCODER block;
-
-    style CANVAS fill:#ffffff,stroke:#ffffff,color:#000000
-    style RPI fill:#ffffff,stroke:#000000,color:#000000,stroke-width:1.6px
-    style MCU fill:#ffffff,stroke:#000000,color:#000000,stroke-width:1.6px
-```
+![Software Architecture](architecture/software_architecture.png)
 
 ## Repository layout
 
@@ -253,7 +106,9 @@ Slambot_Charlie/
 ├── README.md
 ├── architecture/
 │   ├── hardware_architecture.md
-│   └── software_architecture.md
+│   ├── hardware_architecture.png
+│   ├── software_architecture.md
+│   └── software_architecture.png
 ├── ros2_ws/
 │   └── src/
 │       ├── charlie_bringup/
