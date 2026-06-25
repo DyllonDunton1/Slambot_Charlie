@@ -117,7 +117,7 @@ config:
 ---
 flowchart LR
 
-    subgraph CANVAS[Hardware Architecture]
+    subgraph CANVAS[Architecture Canvas]
         direction LR
 
         subgraph POWER[Power System]
