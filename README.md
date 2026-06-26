@@ -93,11 +93,11 @@ These simplified diagrams are intended for portfolio presentation and quick repo
 
 ### Hardware Architecture
 
-![Hardware Architecture](architecture/hardware_architecture.png)
+![Hardware Architecture](architecture/charlie_hardware_diagram.png)
 
 ### Software Architecture
 
-![Software Architecture](architecture/software_architecture.png)
+![Software Architecture](architecture/charlie_software_diagram.png)
 
 ## Repository layout
 
