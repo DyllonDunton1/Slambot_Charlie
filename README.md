@@ -1,6 +1,6 @@
 # Slambot Charlie
 
-Charlie is a Raspberry Pi + Teensy ROS 2 SLAM robot built as a hands-on robotics engineering project. It combines differential-drive motion, closed-loop stepper control, wheel odometry, LiDAR mapping, a live camera feed, and a custom web dashboard for field testing.
+Charlie is a Raspberry Pi + Teensy ROS 2 SLAM robot built as a hands-on robotics engineering project. It combines differential-drive motion, closed-loop stepper control, wheel odometry, LiDAR mapping, a live camera feed, IMU yaw-rate sensing, optional EKF odometry fusion, and a custom web dashboard for field testing.
 
 The goal of this project is simple: build a real robot that can drive, map, report what it is doing, and eventually navigate on its own. It is still a prototype, but the architecture is intentionally kept clean so each subsystem can be tested, explained, and improved without turning the whole robot into a mystery box.
 
@@ -12,17 +12,18 @@ Working now:
 - Teensy 4.1 firmware for low-level stepper motor control and encoder feedback
 - Closed-loop wheel speed control with runtime tuning
 - Differential-drive wheel odometry
+- SparkFun ICM-20948 IMU yaw-rate publisher on `/imu/data`
+- Optional `robot_localization` EKF launch path for fused odometry
 - ROBOTIS serial LiDAR on `/scan`
 - Logitech C270 USB camera on `/camera/image_raw`
 - `slam_toolbox` mapping with pose graph checkpoint save/load
-- Custom FastAPI dashboard for teleoperation, camera, map display, tuning, debug logs, and checkpoints
+- Custom FastAPI dashboard for teleoperation, camera, map display, tuning, IMU status, debug logs, and checkpoints
 - URDF/Xacro model with `base_link`, wheel frames, `laser_frame`, `camera_link`, and `imu_link`
 
 Still in progress:
 
-- SparkFun ICM-20948 IMU integration
-- `robot_localization` EKF fusion
-- Switching wheel odometry from `/odom` to `/wheel/odom` once the EKF owns `odom -> base_link`
+- Final wheel coupling / chassis stiffness upgrades
+- Final odometry and EKF tuning after the mechanical updates
 - Long hallway / loop-closure mapping tests
 - Autonomous navigation with Nav2
 - Final demo videos and portfolio writeup
@@ -39,16 +40,26 @@ Browser dashboard
 Dashboard
   publishes /cmd_vel
   publishes /base_tuning_command
-  subscribes /odom, /base_debug, /camera/image_raw, /map
+  subscribes /odom, /imu/data, /base_debug, /camera/image_raw, /map
   looks up map -> base_link
   calls slam_toolbox checkpoint services
 
 Raspberry Pi base driver
   subscribes /cmd_vel
-  publishes /odom
+  publishes /odom by default
   publishes /base_debug
-  publishes odom -> base_link TF
+  publishes odom -> base_link TF by default
   sends serial commands to Teensy
+
+IMU driver
+  reads SparkFun ICM-20948 over Raspberry Pi I2C
+  publishes /imu/data
+
+Optional EKF mode
+  remaps base driver odom output to /wheel/odom
+  disables base driver odom -> base_link TF
+  starts robot_localization
+  publishes /odometry/filtered and odom -> base_link TF
 
 Teensy firmware
   receives wheel speed targets
@@ -78,11 +89,11 @@ map
         └── imu_link
 ```
 
-Future localization target:
+EKF localization target:
 
 ```text
 base_driver_node -> /wheel/odom, no odom TF
-imu_node         -> /imu/data
+charlie_imu_node -> /imu/data
 robot_localization -> /odometry/filtered and odom -> base_link
 slam_toolbox     -> uses fused odom/TF
 ```
@@ -116,6 +127,9 @@ Slambot_Charlie/
 │       ├── charlie_base_driver/
 │       │   ├── include/charlie_base_driver/
 │       │   └── src/
+│       ├── charlie_imu_driver/
+│       │   ├── charlie_imu_driver/
+│       │   └── launch/imu.launch.py
 │       ├── charlie_web_dashboard/
 │       │   ├── charlie_web_dashboard/
 │       │   │   ├── api.py
@@ -128,7 +142,9 @@ Slambot_Charlie/
 │       │   ├── launch/description.launch.py
 │       │   └── urdf/charlie.urdf.xacro
 │       └── charlie_navigation/
+│           ├── config/ekf.yaml
 │           ├── config/slam_toolbox.yaml
+│           ├── launch/ekf.launch.py
 │           └── launch/mapping.launch.py
 └── teensy_firmware/
     ├── platformio.ini
@@ -140,7 +156,7 @@ Slambot_Charlie/
 
 ### `charlie_bringup`
 
-Top-level launch package. The main launch file starts the base driver, LiDAR, camera/dashboard, robot description, and mapping stack.
+Top-level launch package. The main launch file starts the base driver, LiDAR, camera/dashboard, robot description, IMU driver, and mapping stack.
 
 ```bash
 ros2 launch charlie_bringup bringup.launch.py
@@ -152,9 +168,15 @@ Mapping is enabled by default, but can be controlled with:
 ros2 launch charlie_bringup bringup.launch.py mapping:=true
 ```
 
+EKF mode is disabled by default while the robot is still being mechanically updated. When enabled, the launch file remaps base wheel odometry to `/wheel/odom`, disables the base driver's odom TF, and lets `robot_localization` publish fused odometry and `odom -> base_link`:
+
+```bash
+ros2 launch charlie_bringup bringup.launch.py ekf:=true
+```
+
 ### `charlie_base_driver`
 
-C++ ROS 2 node that bridges the Raspberry Pi and Teensy. It converts `/cmd_vel` into left/right wheel speed targets, sends those targets over serial, parses odometry/debug packets from the Teensy, publishes `/odom`, publishes `/base_debug`, and currently broadcasts `odom -> base_link`.
+C++ ROS 2 node that bridges the Raspberry Pi and Teensy. It converts `/cmd_vel` into left/right wheel speed targets, sends those targets over serial, parses odometry/debug packets from the Teensy, publishes odometry, publishes `/base_debug`, and broadcasts `odom -> base_link` when EKF mode is disabled.
 
 Current serial protocol:
 
@@ -171,6 +193,10 @@ O <left_total_m> <right_total_m> <left_speed_mps> <right_speed_mps> <status>
 D <debug fields...>
 ```
 
+### `charlie_imu_driver`
+
+Python ROS 2 node for the SparkFun ICM-20948. It reads the IMU over Raspberry Pi I2C, performs startup gyro Z bias calibration, and publishes yaw-rate data on `/imu/data` with `frame_id: imu_link`.
+
 ### `charlie_web_dashboard`
 
 Python/FastAPI dashboard used as the field operator console. It provides:
@@ -180,6 +206,7 @@ Python/FastAPI dashboard used as the field operator console. It provides:
 - live map image
 - robot pose overlay
 - runtime tuning controls
+- IMU yaw-rate/status display
 - debug log recording/download
 - SLAM Toolbox checkpoint save/load
 
@@ -214,9 +241,9 @@ imu_link
 
 ### `charlie_navigation`
 
-Mapping and navigation configuration. It currently contains the `slam_toolbox` mapping launch and YAML config. Scan matching is currently disabled because odometry-only mapping has behaved better in the current flat-wall test environment.
+Mapping and localization configuration. It currently contains the `slam_toolbox` mapping launch/config and a `robot_localization` EKF launch/config. Scan matching is currently disabled because odometry-only mapping has behaved better in the current flat-wall test environment.
 
-Future EKF/Nav2 configuration should live here as the navigation stack grows.
+Future Nav2 configuration should live here as the navigation stack grows.
 
 ### `teensy_firmware`
 
@@ -248,7 +275,7 @@ The left AS5600 encoder uses the default `Wire` bus and the right encoder uses `
 | Encoders | AS5600-style magnetic encoders |
 | LiDAR | ROBOTIS serial LiDAR via `hls_lfcd_lds_driver` |
 | Camera | Logitech C270 USB webcam |
-| IMU | SparkFun ICM-20948, planned but not integrated yet |
+| IMU | SparkFun ICM-20948 |
 | Battery | 3S 18650 lithium-ion pack |
 | Prototype wiring | Solderable protoboard / practical hobbyist wiring |
 
@@ -275,10 +302,19 @@ Useful checks:
 ros2 node list
 ros2 topic list
 ros2 topic hz /odom
+ros2 topic hz /imu/data
 ros2 topic hz /scan
 ros2 topic hz /map
 ros2 run tf2_ros tf2_echo map base_link
 ros2 service list | grep slam_toolbox
+```
+
+When EKF mode is enabled, also check:
+
+```bash
+ros2 topic hz /wheel/odom
+ros2 topic hz /odometry/filtered
+ros2 run tf2_ros tf2_echo odom base_link
 ```
 
 ## Firmware build / upload
@@ -313,11 +349,9 @@ Checkpointing uses SLAM Toolbox pose graph serialization, not just a saved map i
 
 Near-term work:
 
-- Add ICM-20948 IMU node publishing `/imu/data` with `frame_id: imu_link`
-- Validate gyro sign conventions before fusion
-- Add `robot_localization` EKF config
-- Change base driver output from `/odom` to `/wheel/odom` when EKF is enabled
-- Let the EKF publish `odom -> base_link`
+- Install final wheel couplings and chassis stiffness upgrades
+- Retune wheel odometry after the mechanical updates
+- Tune EKF covariances after odometry retune
 - Retest hallway mapping with fused odometry
 
 Longer-term work:
