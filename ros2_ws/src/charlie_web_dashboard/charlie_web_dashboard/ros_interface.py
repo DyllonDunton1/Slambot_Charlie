@@ -19,7 +19,7 @@ from tf2_ros import TransformException
 
 from geometry_msgs.msg import Twist, Pose2D
 from nav_msgs.msg import Odometry, OccupancyGrid
-from sensor_msgs.msg import Image
+from sensor_msgs.msg import Image, Imu
 from std_msgs.msg import String
 from slam_toolbox.srv import SerializePoseGraph, DeserializePoseGraph
 
@@ -35,6 +35,7 @@ class CharlieRosInterface(Node):
         self.declare_parameter("camera_topic", "/camera/image_raw")
         self.declare_parameter("map_topic", "/map")
         self.declare_parameter("tuning_command_topic", "/base_tuning_command")
+        self.declare_parameter("imu_topic", "/imu/data")
 
         # Command behavior
         self.declare_parameter("cmd_publish_rate_hz", 10.0)
@@ -54,6 +55,7 @@ class CharlieRosInterface(Node):
         self.camera_topic = self.get_parameter("camera_topic").value
         self.map_topic = self.get_parameter("map_topic").value
         self.tuning_command_topic = self.get_parameter("tuning_command_topic").value
+        self.imu_topic = self.get_parameter("imu_topic").value
 
         self.cmd_publish_rate_hz = float(self.get_parameter("cmd_publish_rate_hz").value)
         self.cmd_timeout_s = float(self.get_parameter("cmd_timeout_s").value)
@@ -80,6 +82,18 @@ class CharlieRosInterface(Node):
             "last_update_age_s": None,
         }
         self.last_odom_time = None
+
+        # IMU state
+        self.imu_state = {
+            "received": False,
+            "topic": self.imu_topic,
+            "frame_id": "",
+            "angular_velocity_z_radps": 0.0,
+            "angular_velocity_z_dps": 0.0,
+            "abs_angular_velocity_z_radps": 0.0,
+            "last_update_age_s": None,
+        }
+        self.last_imu_time = None
 
         # Map state
         self.latest_map_msg = None
@@ -174,6 +188,13 @@ class CharlieRosInterface(Node):
             10,
         )
 
+        self.imu_sub = self.create_subscription(
+            Imu,
+            self.imu_topic,
+            self.imu_callback,
+            10,
+        )
+
         self.map_sub = self.create_subscription(
             OccupancyGrid,
             self.map_topic,
@@ -217,6 +238,7 @@ class CharlieRosInterface(Node):
         self.get_logger().info("serialize_map service: /slam_toolbox/serialize_map")
         self.get_logger().info("deserialize_map service: /slam_toolbox/deserialize_map")
         self.get_logger().info(f"Checkpoint root: {self.checkpoint_root}")
+        self.get_logger().info(f"Subscribing IMU on {self.imu_topic}")
 
     def set_manual_command(self, linear_x: float, angular_z: float):
         linear_x = self.clamp(
@@ -270,6 +292,23 @@ class CharlieRosInterface(Node):
                 "angular_z": msg.twist.twist.angular.z,
                 "last_update_age_s": 0.0,
             }
+    
+    def imu_callback(self, msg: Imu):
+        now = time.monotonic()
+        gz = msg.angular_velocity.z
+
+        with self.lock:
+            self.last_imu_time = now
+            self.imu_state = {
+                "received": True,
+                "topic": self.imu_topic,
+                "frame_id": msg.header.frame_id,
+                "angular_velocity_z_radps": gz,
+                "angular_velocity_z_dps": math.degrees(gz),
+                "abs_angular_velocity_z_radps": abs(gz),
+                "last_update_age_s": 0.0,
+            }
+
     def map_callback(self, msg: OccupancyGrid):
         now = time.monotonic()
 
@@ -380,6 +419,9 @@ class CharlieRosInterface(Node):
             "odom_yaw": self.odom_state.get("yaw", 0.0),
             "odom_linear_x": self.odom_state.get("linear_x", 0.0),
             "odom_angular_z": self.odom_state.get("angular_z", 0.0),
+
+            "imu_yaw_rate_radps": self.imu_state.get("angular_velocity_z_radps", 0.0),
+            "imu_yaw_rate_dps": self.imu_state.get("angular_velocity_z_dps", 0.0),
         }
 
         for key, value in debug_data.items():
@@ -457,6 +499,9 @@ class CharlieRosInterface(Node):
             "odom_yaw",
             "odom_linear_x",
             "odom_angular_z",
+
+            "imu_yaw_rate_radps",
+            "imu_yaw_rate_dps",
         ]
 
         all_fields = set()
@@ -931,6 +976,10 @@ class CharlieRosInterface(Node):
             if self.last_odom_time is not None:
                 odom["last_update_age_s"] = now - self.last_odom_time
 
+            imu = dict(self.imu_state)
+            if self.last_imu_time is not None:
+                imu["last_update_age_s"] = now - self.last_imu_time
+
             camera_age = None
             camera_received = self.latest_jpeg is not None
 
@@ -962,6 +1011,7 @@ class CharlieRosInterface(Node):
                     "max_angular_radps": self.max_angular_radps,
                 },
                 "odom": odom,
+                "imu": imu,
                 "debug": {
                     "received": self.last_debug_time is not None,
                     "topic": self.debug_topic,

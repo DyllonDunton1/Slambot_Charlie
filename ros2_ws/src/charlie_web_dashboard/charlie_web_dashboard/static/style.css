@@ -318,6 +318,26 @@ pre {
     border-color: #7a2d2d;
 }
 
+.imu-status {
+    margin-bottom: 12px;
+    padding: 8px 10px;
+    border-radius: 8px;
+    background: #101010;
+    border: 1px solid #333;
+    color: #ccc;
+    font-family: monospace;
+}
+
+.imu-status.active {
+    color: #9cff9c;
+    border-color: #2d6a2d;
+}
+
+.imu-status.error {
+    color: #ff9c9c;
+    border-color: #7a2d2d;
+}
+
 @media (max-width: 800px) {
     .dashboard {
         height: auto;

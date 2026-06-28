@@ -34,6 +34,8 @@ const saveCheckpointButton = document.getElementById("save-checkpoint");
 const loadLatestCheckpointButton = document.getElementById("load-latest-checkpoint");
 const checkpointStatus = document.getElementById("checkpoint-status");
 
+const imuStatus = document.getElementById("imu-status");
+
 
 function linearSpeed() {
     return parseFloat(linearSlider.value);
@@ -75,6 +77,22 @@ bindClick("start-log", startDebugLog);
 bindClick("stop-log", stopDebugLog);
 bindClick("clear-log", clearDebugLog);
 bindClick("download-log", downloadDebugLog);
+
+
+function setImuStatus(text, mode = "normal") {
+    imuStatus.textContent = text;
+
+    imuStatus.classList.remove("active");
+    imuStatus.classList.remove("error");
+
+    if (mode === "active") {
+        imuStatus.classList.add("active");
+    }
+
+    if (mode === "error") {
+        imuStatus.classList.add("error");
+    }
+}
 
 function setCheckpointStatus(text, mode = "normal") {
     checkpointStatus.textContent = text;
@@ -414,6 +432,24 @@ async function updateStatus() {
         const response = await fetch("/api/status");
         const status = await response.json();
         statusReadout.textContent = JSON.stringify(status, null, 2);
+        
+        if (status.imu) {
+            if (status.imu.received) {
+                const age = status.imu.last_update_age_s ?? 0.0;
+                const gzRad = status.imu.angular_velocity_z_radps ?? 0.0;
+                const gzDps = status.imu.angular_velocity_z_dps ?? 0.0;
+                const frameId = status.imu.frame_id || "unknown";
+
+                const mode = age > 0.5 ? "error" : "active";
+
+                setImuStatus(
+                    `IMU: ${gzRad.toFixed(5)} rad/s | ${gzDps.toFixed(2)} °/s | frame ${frameId} | age ${age.toFixed(2)} s`,
+                    mode
+                );
+            } else {
+                setImuStatus("IMU: waiting");
+            }
+        }
 
         if (status.checkpoint && status.checkpoint.message) {
             if (status.checkpoint.ok) {
