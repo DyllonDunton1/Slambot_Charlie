@@ -1,8 +1,9 @@
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
-from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
+from launch.substitutions import LaunchConfiguration, PathJoinSubstitution, PythonExpression
 
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.substitutions import FindPackageShare
 
 from launch.launch_description_sources import PythonLaunchDescriptionSource
@@ -22,6 +23,14 @@ def generate_launch_description():
 
     mapping = LaunchConfiguration("mapping")
     ekf = LaunchConfiguration("ekf")
+
+    base_odom_topic = PythonExpression([
+        "'/wheel/odom' if '", ekf, "' == 'true' else '/odom'",
+    ])
+    base_publish_tf = ParameterValue(
+        PythonExpression(["'", ekf, "' != 'true'"]),
+        value_type=bool,
+    )
 
     web_dashboard_camera_launch = PathJoinSubstitution([
         FindPackageShare("charlie_web_dashboard"),
@@ -99,7 +108,7 @@ def generate_launch_description():
         DeclareLaunchArgument(
             "ekf",
             default_value="false",
-            description="Start robot_localization EKF in shadow mode",
+            description="Start EKF localization and let robot_localization own odom -> base_link",
         ),
 
         Node(
@@ -115,8 +124,11 @@ def generate_launch_description():
                 "command_rate_hz": 50.0,
                 "odom_frame": "odom",
                 "base_frame": "base_link",
-                "publish_tf": True,
+                "publish_tf": base_publish_tf,
             }],
+            remappings=[
+                ("/odom", base_odom_topic),
+            ],
         ),
 
         Node(
@@ -148,6 +160,10 @@ def generate_launch_description():
 
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(ekf_launch),
+            launch_arguments={
+                "odom_topic": "/wheel/odom",
+                "publish_tf": "true",
+            }.items(),
             condition=IfCondition(ekf),
         ),
 
