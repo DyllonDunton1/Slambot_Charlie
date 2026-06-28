@@ -21,6 +21,7 @@ def generate_launch_description():
     lidar_port = LaunchConfiguration("lidar_port")
 
     mapping = LaunchConfiguration("mapping")
+    ekf = LaunchConfiguration("ekf")
 
     web_dashboard_camera_launch = PathJoinSubstitution([
         FindPackageShare("charlie_web_dashboard"),
@@ -38,6 +39,12 @@ def generate_launch_description():
         FindPackageShare("charlie_imu_driver"),
         "launch",
         "imu.launch.py",
+    ])
+
+    ekf_launch = PathJoinSubstitution([
+        FindPackageShare("charlie_navigation"),
+        "launch",
+        "ekf.launch.py",
     ])
 
     mapping_launch = PathJoinSubstitution([
@@ -89,6 +96,12 @@ def generate_launch_description():
             description="Start slam_toolbox mapping",
         ),
 
+        DeclareLaunchArgument(
+            "ekf",
+            default_value="false",
+            description="Start robot_localization EKF in shadow mode",
+        ),
+
         Node(
             package="charlie_base_driver",
             executable="base_driver_node",
@@ -131,6 +144,11 @@ def generate_launch_description():
         
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(imu_launch),
+        ),
+
+        IncludeLaunchDescription(
+            PythonLaunchDescriptionSource(ekf_launch),
+            condition=IfCondition(ekf),
         ),
 
         IncludeLaunchDescription(
