@@ -34,6 +34,12 @@ def generate_launch_description():
         "description.launch.py",
     ])
 
+    imu_launch = PathJoinSubstitution([
+        FindPackageShare("charlie_imu_driver"),
+        "launch",
+        "imu.launch.py",
+    ])
+
     mapping_launch = PathJoinSubstitution([
         FindPackageShare("charlie_navigation"),
         "launch",
@@ -124,7 +130,12 @@ def generate_launch_description():
         ),
         
         IncludeLaunchDescription(
+            PythonLaunchDescriptionSource(imu_launch),
+        ),
+
+        IncludeLaunchDescription(
             PythonLaunchDescriptionSource(mapping_launch),
             condition=IfCondition(mapping),
         ),
+
     ])

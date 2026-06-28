@@ -5,13 +5,15 @@
   <version>0.0.0</version>
   <description>TODO: Package description</description>
   <maintainer email="duntondyllon@gmail.com">charlie</maintainer>
-  <license>TODO: License declaration</license>
+  <license>MIT</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
 
   <exec_depend>charlie_base_driver</exec_depend>
   <exec_depend>charlie_web_dashboard</exec_depend>
   <exec_depend>charlie_description</exec_depend>
+  <exec_depend>charlie_imu_driver</exec_depend>
+  <exec_depend>charlie_navigation</exec_depend>
   <exec_depend>v4l2_camera</exec_depend>
 
   <test_depend>ament_lint_auto</test_depend>
