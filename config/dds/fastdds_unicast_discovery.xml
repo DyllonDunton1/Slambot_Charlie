@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!--
+  Fast DDS unicast discovery profile for networks that block multicast.
+
+  This profile is optional. It is used only when FASTDDS_DEFAULT_PROFILES_FILE
+  points at this file and RMW_IMPLEMENTATION is set to rmw_fastrtps_cpp.
+
+  The default peer is localhost so Charlie's ROS 2 processes on the Raspberry Pi
+  can discover each other without relying on multicast. To add an off-board ROS 2
+  peer, such as a laptop on the same Wi-Fi network, add that host's IP address to
+  initialPeersList on every host that should participate in DDS discovery.
+-->
+<profiles xmlns="http://www.eprosima.com/XMLSchemas/fastRTPS_Profiles">
+  <participant profile_name="charlie_fastdds_unicast_discovery" is_default_profile="true">
+    <rtps>
+      <builtin>
+        <!-- Keep Fast DDS simple discovery, but seed discovery with unicast peers. -->
+        <discovery_config>
+          <discoveryProtocol>SIMPLE</discoveryProtocol>
+        </discovery_config>
+
+        <!-- Probe enough participant IDs for Charlie's separate ROS 2 processes. -->
+        <maxInitialPeersRange>32</maxInitialPeersRange>
+
+        <!-- Listen for discovery meta-traffic on all local IPv4 interfaces. -->
+        <metatrafficUnicastLocatorList>
+          <locator>
+            <udpv4>
+              <address>0.0.0.0</address>
+            </udpv4>
+          </locator>
+        </metatrafficUnicastLocatorList>
+
+        <!-- Disable multicast discovery for this profile. -->
+        <metatrafficMulticastLocatorList/>
+
+        <initialPeersList>
+          <!-- Local Raspberry Pi ROS 2 processes. -->
+          <locator>
+            <udpv4>
+              <address>127.0.0.1</address>
+            </udpv4>
+          </locator>
+
+          <!--
+            Optional laptop or off-board ROS 2 peer example.
+            Copy this block, uncomment it, and replace the address with the peer's
+            current IP address on the same network. Add matching peer entries on
+            the laptop side as well.
+
+          <locator>
+            <udpv4>
+              <address>192.168.1.50</address>
+            </udpv4>
+          </locator>
+          -->
+        </initialPeersList>
+      </builtin>
+    </rtps>
+  </participant>
+</profiles>

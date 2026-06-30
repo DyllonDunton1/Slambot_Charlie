@@ -120,6 +120,8 @@ Slambot_Charlie/
 │   ├── hardware_architecture.png
 │   ├── software_architecture.md
 │   └── software_architecture.png
+├── config/
+│   └── dds/fastdds_unicast_discovery.xml
 ├── ros2_ws/
 │   └── src/
 │       ├── charlie_bringup/
@@ -146,6 +148,8 @@ Slambot_Charlie/
 │           ├── config/slam_toolbox.yaml
 │           ├── launch/ekf.launch.py
 │           └── launch/mapping.launch.py
+├── scripts/
+│   └── launch_charlie_unicast.sh
 └── teensy_firmware/
     ├── platformio.ini
     ├── include/
@@ -296,6 +300,13 @@ Launch the robot:
 ros2 launch charlie_bringup bringup.launch.py
 ```
 
+Launch the robot with Fast DDS unicast discovery:
+
+```bash
+cd ~/Slambot_Charlie
+./scripts/launch_charlie_unicast.sh
+```
+
 Useful checks:
 
 ```bash
@@ -316,6 +327,33 @@ ros2 topic hz /wheel/odom
 ros2 topic hz /odometry/filtered
 ros2 run tf2_ros tf2_echo odom base_link
 ```
+
+## Networking on multicast-restricted Wi-Fi
+
+ROS 2 DDS discovery normally uses multicast so participants can find each other automatically. Managed Wi-Fi networks such as eduroam may block or isolate multicast traffic between clients. In that case, SSH and the browser dashboard can still work over normal unicast HTTP/TCP while ROS 2 discovery fails or behaves inconsistently.
+
+For those networks, Charlie includes an optional Fast DDS unicast discovery profile:
+
+```bash
+cd ~/Slambot_Charlie
+./scripts/launch_charlie_unicast.sh
+```
+
+The script sources ROS 2, sources the built workspace, exports `RMW_IMPLEMENTATION=rmw_fastrtps_cpp`, points `FASTDDS_DEFAULT_PROFILES_FILE` at `config/dds/fastdds_unicast_discovery.xml`, and then runs the normal bringup launch:
+
+```bash
+ros2 launch charlie_bringup bringup.launch.py
+```
+
+Additional launch arguments pass through to the normal bringup file, for example:
+
+```bash
+./scripts/launch_charlie_unicast.sh ekf:=true
+```
+
+To add an off-board ROS 2 peer later, edit `config/dds/fastdds_unicast_discovery.xml` and add a new locator in `initialPeersList` with the peer's current IP address. Add matching peer entries on the other host as well so both machines know where to send discovery meta-traffic.
+
+This changes DDS discovery only. It does not change robot nodes, topics, TF ownership, SLAM Toolbox settings, EKF configuration, navigation behavior, firmware, or dashboard behavior. Launching with `ros2 launch charlie_bringup bringup.launch.py` directly continues to use the normal middleware defaults.
 
 ## Firmware build / upload
 
