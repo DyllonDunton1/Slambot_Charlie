@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Launch Charlie with Fast DDS unicast discovery.
+# Launch Charlie with optional Fast DDS unicast discovery and EKF mode.
 #
 # This is intentionally kept as a thin startup wrapper so the normal ROS launch
 # files remain middleware-agnostic and this can later move into a systemd unit.
@@ -14,6 +14,51 @@ ROS_SETUP="/opt/ros/${ROS_DISTRO}/setup.bash"
 WORKSPACE_SETUP="${REPO_ROOT}/ros2_ws/install/setup.bash"
 DDS_PROFILE="${REPO_ROOT}/config/dds/fastdds_unicast_discovery.xml"
 
+USE_UNICAST=false
+USE_EKF=false
+LAUNCH_ARGS=()
+
+show_usage() {
+  cat <<EOF
+Usage: $0 [-unicast] [-ekf] [additional bringup launch args]
+
+Options:
+  -unicast   Use the Fast DDS unicast discovery profile.
+  -ekf       Launch bringup with ekf:=true.
+  -h, --help Show this help message.
+
+Examples:
+  $0
+  $0 -unicast
+  $0 -ekf
+  $0 -unicast -ekf
+  $0 -unicast mapping:=false
+EOF
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -unicast)
+      USE_UNICAST=true
+      ;;
+    -ekf)
+      USE_EKF=true
+      ;;
+    -h|--help)
+      show_usage
+      exit 0
+      ;;
+    *)
+      LAUNCH_ARGS+=("$1")
+      ;;
+  esac
+  shift
+done
+
+if [[ "${USE_EKF}" == "true" ]]; then
+  LAUNCH_ARGS+=("ekf:=true")
+fi
+
 if [[ ! -f "${ROS_SETUP}" ]]; then
   echo "Missing ROS setup file: ${ROS_SETUP}" >&2
   exit 1
@@ -25,7 +70,7 @@ if [[ ! -f "${WORKSPACE_SETUP}" ]]; then
   exit 1
 fi
 
-if [[ ! -f "${DDS_PROFILE}" ]]; then
+if [[ "${USE_UNICAST}" == "true" && ! -f "${DDS_PROFILE}" ]]; then
   echo "Missing Fast DDS profile: ${DDS_PROFILE}" >&2
   exit 1
 fi
@@ -39,10 +84,17 @@ source "${WORKSPACE_SETUP}"
 
 set -u
 
-export RMW_IMPLEMENTATION=rmw_fastrtps_cpp
-export FASTDDS_DEFAULT_PROFILES_FILE="${DDS_PROFILE}"
+if [[ "${USE_UNICAST}" == "true" ]]; then
+  export RMW_IMPLEMENTATION=rmw_fastrtps_cpp
+  export FASTDDS_DEFAULT_PROFILES_FILE="${DDS_PROFILE}"
+  echo "Using RMW_IMPLEMENTATION=${RMW_IMPLEMENTATION}"
+  echo "Using FASTDDS_DEFAULT_PROFILES_FILE=${FASTDDS_DEFAULT_PROFILES_FILE}"
+else
+  echo "Using default ROS 2 middleware discovery"
+fi
 
-echo "Using RMW_IMPLEMENTATION=${RMW_IMPLEMENTATION}"
-echo "Using FASTDDS_DEFAULT_PROFILES_FILE=${FASTDDS_DEFAULT_PROFILES_FILE}"
+if [[ "${USE_EKF}" == "true" ]]; then
+  echo "Launching with EKF enabled: ekf:=true"
+fi
 
-exec ros2 launch charlie_bringup bringup.launch.py "$@"
+exec ros2 launch charlie_bringup bringup.launch.py "${LAUNCH_ARGS[@]}"
