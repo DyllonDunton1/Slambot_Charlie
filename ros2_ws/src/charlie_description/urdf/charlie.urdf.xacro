@@ -26,10 +26,10 @@
   <xacro:property name="base_box_z" value="0.037"/>
 
   <!-- Wheel dimensions -->
-  <xacro:property name="wheel_diameter" value="0.084"/>
+  <xacro:property name="wheel_diameter" value="0.08454"/>
   <xacro:property name="wheel_radius" value="${wheel_diameter / 2.0}"/>
   <xacro:property name="wheel_width" value="0.00508"/>
-  <xacro:property name="wheel_separation" value="0.210"/>
+  <xacro:property name="wheel_separation" value="0.196"/>
 
   <!-- LiDAR dimensions -->
   <xacro:property name="lidar_radius" value="0.031"/>
