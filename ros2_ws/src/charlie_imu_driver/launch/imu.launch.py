@@ -15,7 +15,7 @@ def generate_launch_description():
                 "frame_id": "imu_link",
                 "publish_rate_hz": 100.0,
                 "gyro_z_sign": 1.0,
-                "bias_samples": 250,
+                "bias_samples": 2000,
             }],
         )
     ])
