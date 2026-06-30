@@ -294,6 +294,8 @@ void BaseDriverNode::handle_debug_packet(const std::string & line)
     double kp = last_kp_;
     double ki = last_ki_;
     double wheel_radius_m = last_wheel_radius_m_;
+    double battery_adc_voltage = 0.0;
+    bool has_battery_adc_voltage = false;
 
     std::istringstream ss(line);
 
@@ -314,12 +316,16 @@ void BaseDriverNode::handle_debug_packet(const std::string & line)
         return;
     }
 
-    // Optional extra tuning fields from Teensy:
-    // D ... left_command right_command kp ki wheel_radius
+    // Optional extra tuning/debug fields from Teensy:
+    // D ... left_command right_command kp ki wheel_radius battery_adc_voltage
     if (ss >> kp >> ki >> wheel_radius_m) {
         last_kp_ = kp;
         last_ki_ = ki;
         last_wheel_radius_m_ = wheel_radius_m;
+
+        if (ss >> battery_adc_voltage) {
+            has_battery_adc_voltage = true;
+        }
     }
 
     std_msgs::msg::String msg;
@@ -341,6 +347,11 @@ void BaseDriverNode::handle_debug_packet(const std::string & line)
     json << "\"ki\":" << ki << ",";
     json << "\"wheel_radius_m\":" << wheel_radius_m << ",";
     json << "\"wheel_separation_m\":" << wheel_separation_;
+
+    if (has_battery_adc_voltage) {
+        json << ",\"battery_adc_voltage\":" << battery_adc_voltage;
+    }
+
     json << "}";
 
     msg.data = json.str();
