@@ -25,6 +25,25 @@ uint32_t last_serial_command_us = 0;
 constexpr uint32_t serial_debug_update_time_us = 100000;  // 10 Hz
 uint32_t last_serial_debug_us = 0;
 
+constexpr uint32_t serial_battery_update_time_us = 10000000;  // 0.1 Hz
+uint32_t last_serial_battery_us = 0;
+
+constexpr float adc_ref_v = 3.3f;
+constexpr float adc_max_count = 4095.0f;
+
+// Actual resistor divider you wired:
+// Battery+ -> 47k -> ADC node -> 15k -> GND
+constexpr float battery_r_high_ohm = 47000.0f;
+constexpr float battery_r_low_ohm  = 15000.0f;
+constexpr float battery_divider_scale = (battery_r_high_ohm + battery_r_low_ohm) / battery_r_low_ohm;
+
+// Use this after comparing against a multimeter.
+// Example: if multimeter=11.70 and Teensy reports 11.55,
+// set this to 11.70 / 11.55.
+constexpr float battery_cal_scale = 1.0f;
+
+constexpr uint8_t battery_adc_pin = A13;  // Teensy physical pin 27
+
 
 String serial_line = "";
 
@@ -83,6 +102,10 @@ void set_speeds(float left_speed, float right_speed) {
 
 uint32_t last_us = 0;
 float dt_s = 0.01f;
+
+float read_battery_adc_voltage();
+float battery_voltage_from_adc(float adc_voltage);
+float read_battery_voltage();
 
 
 void handle_config_command(String line)
@@ -341,14 +364,65 @@ void send_debug_status() {
     Serial.print(" ");
 
     Serial.print(wheel_radius_m, 6);
+    Serial.print(" ");
+
+    Serial.print(read_battery_adc_voltage(), 6);
 
     Serial.println();
 
 
 }
 
+float read_battery_adc_voltage()
+{
+    constexpr int num_samples = 32;
+
+    uint32_t raw_sum = 0;
+
+    for (int i = 0; i < num_samples; ++i) {
+        raw_sum += analogRead(battery_adc_pin);
+        delayMicroseconds(100);
+    }
+
+    const float raw_avg =
+        static_cast<float>(raw_sum) / static_cast<float>(num_samples);
+
+    return (raw_avg / adc_max_count) * adc_ref_v;
+}
+
+float battery_voltage_from_adc(float adc_voltage)
+{
+    return adc_voltage * battery_divider_scale * battery_cal_scale;
+}
+
+float read_battery_voltage()
+{
+    return battery_voltage_from_adc(read_battery_adc_voltage());
+}
+
+void send_battery_status()
+{
+    const uint32_t now_us = micros();
+
+    if (now_us - last_serial_battery_us < serial_battery_update_time_us) {
+        return;
+    }
+
+    last_serial_battery_us = now_us;
+
+    const float battery_voltage = read_battery_voltage();
+
+    Serial.print("B ");
+    Serial.println(battery_voltage, 3);
+}
+
+
+
 void setup() {
     Serial.begin(115200);
+
+    analogReadResolution(12);
+    pinMode(battery_adc_pin, INPUT);
 
     // Do not wait forever for Serial on a robot.
     // This gives the Pi time to connect, but still boots standalone.
@@ -392,4 +466,5 @@ void loop() {
 
     send_odom_status();
     send_debug_status();
+    send_battery_status();
 }
