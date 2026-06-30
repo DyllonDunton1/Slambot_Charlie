@@ -8,7 +8,7 @@
 
 constexpr uint32_t motor_vel_update_time_us = 10000;
 
-float wheel_radius_m = 0.04102f;
+float wheel_radius_m = 0.04227f;
 float circumference = 2.0f * 3.14159265f * wheel_radius_m;
 constexpr float ticks_per_rev = 4096.0f;
 float meters_per_tick = circumference / ticks_per_rev;

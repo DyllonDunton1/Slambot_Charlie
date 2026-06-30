@@ -77,7 +77,7 @@ def generate_launch_description():
 
         DeclareLaunchArgument(
             "wheel_separation",
-            default_value="0.221",
+            default_value="0.196",
             description="Distance between left and right wheels in meters",
         ),
 
