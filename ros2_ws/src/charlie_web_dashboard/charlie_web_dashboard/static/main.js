@@ -36,6 +36,10 @@ const checkpointStatus = document.getElementById("checkpoint-status");
 
 const imuStatus = document.getElementById("imu-status");
 
+const batteryPill = document.getElementById("battery-pill");
+const batteryVoltage = document.getElementById("battery-voltage");
+const batteryPercent = document.getElementById("battery-percent");
+
 
 function linearSpeed() {
     return parseFloat(linearSlider.value);
@@ -78,6 +82,55 @@ bindClick("stop-log", stopDebugLog);
 bindClick("clear-log", clearDebugLog);
 bindClick("download-log", downloadDebugLog);
 
+function updateBatteryHeader(status) {
+    if (!batteryPill || !batteryVoltage || !batteryPercent) {
+        return;
+    }
+
+    batteryPill.classList.remove("active");
+    batteryPill.classList.remove("battery-low");
+    batteryPill.classList.remove("battery-critical");
+
+    const battery = status.battery;
+
+    if (!battery || !battery.received || battery.voltage === null || battery.voltage === undefined) {
+        batteryVoltage.textContent = "--.-- V";
+        batteryPercent.textContent = "--%";
+        return;
+    }
+
+    const voltage = Number(battery.voltage);
+    const percentage = battery.percentage === null || battery.percentage === undefined
+        ? null
+        : Number(battery.percentage);
+
+    if (Number.isNaN(voltage)) {
+        batteryVoltage.textContent = "--.-- V";
+    } else {
+        batteryVoltage.textContent = `${voltage.toFixed(2)} V`;
+    }
+
+    if (percentage === null || Number.isNaN(percentage)) {
+        batteryPercent.textContent = "--%";
+    } else {
+        batteryPercent.textContent = `${Math.round(percentage)}%`;
+    }
+
+    const age = battery.last_update_age_s ?? 999.0;
+
+    if (age > 2.0) {
+        batteryPill.classList.add("battery-critical");
+        return;
+    }
+
+    if (voltage <= 10.2) {
+        batteryPill.classList.add("battery-critical");
+    } else if (voltage <= 10.5) {
+        batteryPill.classList.add("battery-low");
+    } else {
+        batteryPill.classList.add("active");
+    }
+}
 
 function setImuStatus(text, mode = "normal") {
     imuStatus.textContent = text;
@@ -432,6 +485,8 @@ async function updateStatus() {
         const response = await fetch("/api/status");
         const status = await response.json();
         statusReadout.textContent = JSON.stringify(status, null, 2);
+
+        updateBatteryHeader(status);
         
         if (status.imu) {
             if (status.imu.received) {

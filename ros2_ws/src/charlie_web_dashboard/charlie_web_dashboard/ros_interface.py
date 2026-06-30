@@ -19,7 +19,7 @@ from tf2_ros import TransformException
 
 from geometry_msgs.msg import Twist, Pose2D
 from nav_msgs.msg import Odometry, OccupancyGrid
-from sensor_msgs.msg import Image, Imu
+from sensor_msgs.msg import Image, Imu, BatteryState
 from std_msgs.msg import String
 from slam_toolbox.srv import SerializePoseGraph, DeserializePoseGraph
 
@@ -36,6 +36,7 @@ class CharlieRosInterface(Node):
         self.declare_parameter("map_topic", "/map")
         self.declare_parameter("tuning_command_topic", "/base_tuning_command")
         self.declare_parameter("imu_topic", "/imu/data")
+        self.declare_parameter("battery_topic", "/battery/state")
 
         # Command behavior
         self.declare_parameter("cmd_publish_rate_hz", 10.0)
@@ -56,6 +57,7 @@ class CharlieRosInterface(Node):
         self.map_topic = self.get_parameter("map_topic").value
         self.tuning_command_topic = self.get_parameter("tuning_command_topic").value
         self.imu_topic = self.get_parameter("imu_topic").value
+        self.battery_topic = self.get_parameter("battery_topic").value
 
         self.cmd_publish_rate_hz = float(self.get_parameter("cmd_publish_rate_hz").value)
         self.cmd_timeout_s = float(self.get_parameter("cmd_timeout_s").value)
@@ -94,6 +96,19 @@ class CharlieRosInterface(Node):
             "last_update_age_s": None,
         }
         self.last_imu_time = None
+
+        # Battery state
+        self.battery_state = {
+            "received": False,
+            "topic": self.battery_topic,
+            "voltage": None,
+            "percentage": None,
+            "present": False,
+            "status": 0,
+            "technology": 0,
+            "last_update_age_s": None,
+        }
+        self.last_battery_time = None
 
         # Map state
         self.latest_map_msg = None
@@ -195,6 +210,13 @@ class CharlieRosInterface(Node):
             10,
         )
 
+        self.battery_sub = self.create_subscription(
+            BatteryState,
+            self.battery_topic,
+            self.battery_callback,
+            10,
+        )
+
         self.map_sub = self.create_subscription(
             OccupancyGrid,
             self.map_topic,
@@ -239,6 +261,7 @@ class CharlieRosInterface(Node):
         self.get_logger().info("deserialize_map service: /slam_toolbox/deserialize_map")
         self.get_logger().info(f"Checkpoint root: {self.checkpoint_root}")
         self.get_logger().info(f"Subscribing IMU on {self.imu_topic}")
+        self.get_logger().info(f"Subscribing battery on {self.battery_topic}")
 
     def set_manual_command(self, linear_x: float, angular_z: float):
         linear_x = self.clamp(
@@ -306,6 +329,26 @@ class CharlieRosInterface(Node):
                 "angular_velocity_z_radps": gz,
                 "angular_velocity_z_dps": math.degrees(gz),
                 "abs_angular_velocity_z_radps": abs(gz),
+                "last_update_age_s": 0.0,
+            }
+
+    def battery_callback(self, msg: BatteryState):
+        now = time.monotonic()
+
+        percentage = None
+        if msg.percentage >= 0.0:
+            percentage = max(0.0, min(100.0, float(msg.percentage) * 100.0))
+
+        with self.lock:
+            self.last_battery_time = now
+            self.battery_state = {
+                "received": True,
+                "topic": self.battery_topic,
+                "voltage": float(msg.voltage),
+                "percentage": percentage,
+                "present": bool(msg.present),
+                "status": int(msg.power_supply_status),
+                "technology": int(msg.power_supply_technology),
                 "last_update_age_s": 0.0,
             }
 
@@ -980,6 +1023,10 @@ class CharlieRosInterface(Node):
             if self.last_imu_time is not None:
                 imu["last_update_age_s"] = now - self.last_imu_time
 
+            battery = dict(self.battery_state)
+            if self.last_battery_time is not None:
+                battery["last_update_age_s"] = now - self.last_battery_time
+
             camera_age = None
             camera_received = self.latest_jpeg is not None
 
@@ -1012,6 +1059,7 @@ class CharlieRosInterface(Node):
                 },
                 "odom": odom,
                 "imu": imu,
+                "battery": battery,
                 "debug": {
                     "received": self.last_debug_time is not None,
                     "topic": self.debug_topic,

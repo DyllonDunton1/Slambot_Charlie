@@ -37,7 +37,9 @@ BaseDriverNode::BaseDriverNode()
   serial_connected_(false),
   last_kp_(0.0),
   last_ki_(0.0),
-  last_wheel_radius_m_(0.0)
+  last_wheel_radius_m_(0.0),
+  last_battery_voltage_(0.0),
+  last_battery_percentage_(0.0)
 {
     declare_parameters();
     load_parameters();
@@ -66,6 +68,7 @@ BaseDriverNode::BaseDriverNode()
 
     odom_pub_ = this->create_publisher<nav_msgs::msg::Odometry>("/odom", 10);
     base_debug_pub_ = this->create_publisher<std_msgs::msg::String>("/base_debug", 10);
+    battery_pub_ = this->create_publisher<sensor_msgs::msg::BatteryState>("/battery/state", 10);
 
     if (publish_tf_) {
         tf_broadcaster_ = std::make_unique<tf2_ros::TransformBroadcaster>(*this);
@@ -89,6 +92,7 @@ BaseDriverNode::BaseDriverNode()
     RCLCPP_INFO(this->get_logger(), "base_frame: %s", base_frame_.c_str());
     RCLCPP_INFO(this->get_logger(), "publish_tf: %s", publish_tf_ ? "true" : "false");
     RCLCPP_INFO(this->get_logger(), "Subscribing tuning commands on /base_tuning_command");
+    RCLCPP_INFO(this->get_logger(), "Publishing battery state on /battery/state");
 }
 
 void BaseDriverNode::declare_parameters()
@@ -260,6 +264,9 @@ void BaseDriverNode::handle_teensy_line(const std::string & line)
     else if (line[0] == 'E') {
         RCLCPP_WARN(this->get_logger(), "Teensy error: %s", line.c_str());
     }
+    else if (line[0] == 'B') {
+        handle_battery_packet(line);
+    }
     else {
         RCLCPP_INFO(this->get_logger(), "Teensy says: %s", line.c_str());
     }
@@ -338,6 +345,90 @@ void BaseDriverNode::handle_debug_packet(const std::string & line)
 
     msg.data = json.str();
     base_debug_pub_->publish(msg);
+}
+
+void BaseDriverNode::handle_battery_packet(const std::string & line)
+{
+    char packet_type = '\0';
+    double voltage = 0.0;
+
+    std::istringstream ss(line);
+    ss >> packet_type >> voltage;
+
+    if (ss.fail() || packet_type != 'B' || !std::isfinite(voltage)) {
+        RCLCPP_WARN(this->get_logger(), "Bad battery packet: %s", line.c_str());
+        return;
+    }
+
+    last_battery_voltage_ = voltage;
+    last_battery_percentage_ = estimate_battery_percentage(voltage);
+
+    publish_battery_state(voltage);
+}
+
+double BaseDriverNode::estimate_battery_percentage(double voltage) const
+{
+    struct BatteryPoint {
+        double voltage;
+        double percentage;
+    };
+
+    static constexpr BatteryPoint table[] = {
+        {12.60, 1.00},
+        {12.30, 0.90},
+        {12.10, 0.80},
+        {11.90, 0.70},
+        {11.70, 0.60},
+        {11.50, 0.50},
+        {11.30, 0.40},
+        {11.10, 0.30},
+        {10.80, 0.20},
+        {10.50, 0.10},
+        {10.20, 0.05},
+        { 9.90, 0.00},
+    };
+
+    constexpr std::size_t n = sizeof(table) / sizeof(table[0]);
+
+    if (voltage >= table[0].voltage) {
+        return 1.0;
+    }
+
+    if (voltage <= table[n - 1].voltage) {
+        return 0.0;
+    }
+
+    for (std::size_t i = 0; i < n - 1; ++i) {
+        const auto high = table[i];
+        const auto low = table[i + 1];
+
+        if (voltage <= high.voltage && voltage >= low.voltage) {
+            const double t =
+                (voltage - low.voltage) / (high.voltage - low.voltage);
+
+            return low.percentage + t * (high.percentage - low.percentage);
+        }
+    }
+
+    return 0.0;
+}
+
+void BaseDriverNode::publish_battery_state(double voltage)
+{
+    sensor_msgs::msg::BatteryState msg;
+
+    msg.header.stamp = this->now();
+    msg.voltage = static_cast<float>(voltage);
+    msg.percentage = static_cast<float>(estimate_battery_percentage(voltage));
+    msg.present = true;
+
+    msg.power_supply_status =
+        sensor_msgs::msg::BatteryState::POWER_SUPPLY_STATUS_DISCHARGING;
+
+    msg.power_supply_technology =
+        sensor_msgs::msg::BatteryState::POWER_SUPPLY_TECHNOLOGY_LION;
+
+    battery_pub_->publish(msg);
 }
 
 void BaseDriverNode::process_odom_packet(

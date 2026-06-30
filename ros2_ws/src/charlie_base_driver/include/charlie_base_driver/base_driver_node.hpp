@@ -10,6 +10,7 @@
 #include "std_msgs/msg/string.hpp"
 #include "rcl_interfaces/msg/set_parameters_result.hpp"
 #include "tf2_ros/transform_broadcaster.h"
+#include "sensor_msgs/msg/battery_state.hpp"
 
 #include "charlie_base_driver/serial_port.hpp"
 
@@ -36,6 +37,9 @@ private:
     std::string make_speed_command_string() const;
     void handle_teensy_line(const std::string & line);
     void handle_debug_packet(const std::string & line);
+    void handle_battery_packet(const std::string & line);
+    double estimate_battery_percentage(double voltage) const;
+    void publish_battery_state(double voltage);
 
     void process_odom_packet(
         double left_total_m,
@@ -95,6 +99,10 @@ private:
     rclcpp::Time last_odom_time_;
     int last_status_;
 
+    // Batery monitoring
+    double last_battery_voltage_;
+    double last_battery_percentage_;
+
     // Timing
     rclcpp::Time last_cmd_time_;
     rclcpp::Time last_debug_print_time_;
@@ -112,6 +120,7 @@ private:
     rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr cmd_vel_sub_;
     rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr odom_pub_;
     rclcpp::Publisher<std_msgs::msg::String>::SharedPtr base_debug_pub_;
+    rclcpp::Publisher<sensor_msgs::msg::BatteryState>::SharedPtr battery_pub_;
     std::unique_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
     rclcpp::TimerBase::SharedPtr control_timer_;
     rclcpp::Subscription<std_msgs::msg::String>::SharedPtr tuning_command_sub_;

@@ -10,12 +10,59 @@ body {
 }
 
 .dashboard {
-    height: 100vh;
+    height: calc(100vh - 48px);
     display: grid;
     grid-template-columns: 1.2fr 1fr;
     grid-template-rows: 1fr 1fr;
     gap: 12px;
     padding: 12px;
+}
+
+.top-status-bar {
+    height: 48px;
+    display: flex;
+    justify-content: flex-end;
+    align-items: center;
+    padding: 8px 12px 0 12px;
+    background: #111;
+}
+
+.status-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 190px;
+    justify-content: center;
+    padding: 8px 12px;
+    border-radius: 999px;
+    border: 1px solid #333;
+    background: #1c1c1c;
+    color: #ccc;
+    font-family: monospace;
+    font-weight: bold;
+}
+
+.status-pill.active {
+    color: #9cff9c;
+    border-color: #2d6a2d;
+}
+
+.status-pill.battery-low {
+    color: #ffd37a;
+    border-color: #8a6a20;
+}
+
+.status-pill.battery-critical {
+    color: #ff9c9c;
+    border-color: #7a2d2d;
+}
+
+.status-label {
+    opacity: 0.75;
+}
+
+.status-separator {
+    opacity: 0.45;
 }
 
 .panel {
