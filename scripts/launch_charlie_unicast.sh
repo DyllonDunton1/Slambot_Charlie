@@ -4,7 +4,7 @@
 # This is intentionally kept as a thin startup wrapper so the normal ROS launch
 # files remain middleware-agnostic and this can later move into a systemd unit.
 
-set -euo pipefail
+set -eo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
@@ -30,10 +30,14 @@ if [[ ! -f "${DDS_PROFILE}" ]]; then
   exit 1
 fi
 
+# Keep nounset disabled while sourcing ROS setup files. Some ament setup hooks
+# read optional environment variables that may not be defined yet.
 # shellcheck source=/dev/null
 source "${ROS_SETUP}"
 # shellcheck source=/dev/null
 source "${WORKSPACE_SETUP}"
+
+set -u
 
 export RMW_IMPLEMENTATION=rmw_fastrtps_cpp
 export FASTDDS_DEFAULT_PROFILES_FILE="${DDS_PROFILE}"
