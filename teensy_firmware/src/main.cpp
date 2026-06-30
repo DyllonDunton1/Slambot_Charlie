@@ -25,7 +25,7 @@ uint32_t last_serial_command_us = 0;
 constexpr uint32_t serial_debug_update_time_us = 100000;  // 10 Hz
 uint32_t last_serial_debug_us = 0;
 
-constexpr uint32_t serial_battery_update_time_us = 10000000;  // 0.1 Hz
+constexpr uint32_t serial_battery_update_time_us = 500000;  // 2 Hz
 uint32_t last_serial_battery_us = 0;
 
 constexpr float adc_ref_v = 3.3f;
