@@ -16,7 +16,7 @@ ekf_filter_node:
       false, false, false,   # x, y, z
       false, false, false,   # roll, pitch, yaw
       true,  false, false,   # vx, vy, vz
-      false, false, false,   # vroll, vpitch, vyaw
+      false, false, true,   # vroll, vpitch, vyaw
       false, false, false    # ax, ay, az
     ]
     odom0_queue_size: 10
@@ -28,7 +28,7 @@ ekf_filter_node:
       false, false, false,   # x, y, z
       false, false, false,   # roll, pitch, yaw
       false, false, false,   # vx, vy, vz
-      false, false, true,    # vroll, vpitch, vyaw
+      false, false, false,    # vroll, vpitch, vyaw
       false, false, false    # ax, ay, az
     ]
     imu0_queue_size: 20

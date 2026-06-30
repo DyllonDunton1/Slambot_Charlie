@@ -27,6 +27,7 @@ slam_toolbox:
 
     # Loop closure
     do_loop_closing: true
+    loop_search_maximum_distance: 3.0
 
     # Motion thresholds
     minimum_travel_distance: 0.03
