@@ -28,8 +28,8 @@ public:
     float max_command_speed = 1.1f;
     float linear_acceleration = 0.005f;
 
-    float kp = 0.2f;
-    float ki = 0.3f;
+    float kp = 0.05f;
+    float ki = 0.0f;
     float max_error = 0.25f;
     float max_integral_error = 0.05f;
     float max_correction = 0.1f;
