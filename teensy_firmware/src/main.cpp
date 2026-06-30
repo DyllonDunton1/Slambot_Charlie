@@ -37,10 +37,9 @@ constexpr float battery_r_high_ohm = 47000.0f;
 constexpr float battery_r_low_ohm  = 15000.0f;
 constexpr float battery_divider_scale = (battery_r_high_ohm + battery_r_low_ohm) / battery_r_low_ohm;
 
-// Use this after comparing against a multimeter.
-// Example: if multimeter=11.70 and Teensy reports 11.55,
-// set this to 11.70 / 11.55.
-constexpr float battery_cal_scale = 1.0f;
+// Calibrated from multimeter pack voltage / Teensy-reported pack voltage.
+// 2026-06-30: 10.65 V measured / 10.38 V reported = 1.026012.
+constexpr float battery_cal_scale = 1.026012f;
 
 constexpr uint8_t battery_adc_pin = A13;  // Teensy physical pin 27
 
