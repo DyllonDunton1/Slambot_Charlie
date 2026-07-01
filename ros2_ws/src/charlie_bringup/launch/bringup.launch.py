@@ -15,6 +15,7 @@ def generate_launch_description():
     serial_port = LaunchConfiguration("serial_port")
     baud_rate = LaunchConfiguration("baud_rate")
     wheel_separation = LaunchConfiguration("wheel_separation")
+    cmd_timeout_s = LaunchConfiguration("cmd_timeout_s")
 
     video_device = LaunchConfiguration("video_device")
     pixel_format = LaunchConfiguration("pixel_format")
@@ -82,6 +83,12 @@ def generate_launch_description():
         ),
 
         DeclareLaunchArgument(
+            "cmd_timeout_s",
+            default_value="20.0",
+            description="Seconds before base driver stops after /cmd_vel loss. Use short values for normal deadman operation.",
+        ),
+
+        DeclareLaunchArgument(
             "video_device",
             default_value="/dev/video0",
             description="Video device path for the Logitech C270 webcam",
@@ -120,7 +127,7 @@ def generate_launch_description():
                 "serial_port": serial_port,
                 "baud_rate": baud_rate,
                 "wheel_separation": wheel_separation,
-                "cmd_timeout_s": 0.5,
+                "cmd_timeout_s": cmd_timeout_s,
                 "command_rate_hz": 50.0,
                 "odom_frame": "odom",
                 "base_frame": "base_link",
