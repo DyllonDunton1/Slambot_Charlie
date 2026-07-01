@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Launch Charlie with optional Fast DDS unicast discovery and EKF mode.
+# Launch Charlie with optional Fast DDS unicast discovery, EKF mode, and
+# fastforward mode.
 #
 # This is intentionally kept as a thin startup wrapper so the normal ROS launch
 # files remain middleware-agnostic and this can later move into a systemd unit.
@@ -16,22 +17,25 @@ DDS_PROFILE="${REPO_ROOT}/config/dds/fastdds_unicast_discovery.xml"
 
 USE_UNICAST=false
 USE_EKF=false
+USE_FASTFORWARD=false
 LAUNCH_ARGS=()
 
 show_usage() {
   cat <<EOF
-Usage: $0 [-unicast] [-ekf] [additional bringup launch args]
+Usage: $0 [-unicast] [-ekf] [-fastforward] [additional bringup launch args]
 
 Options:
-  -unicast   Use the Fast DDS unicast discovery profile.
-  -ekf       Launch bringup with ekf:=true.
-  -h, --help Show this help message.
+  -unicast      Use the Fast DDS unicast discovery profile.
+  -ekf          Launch bringup with ekf:=true.
+  -fastforward  Launch bringup with fastforward:=true.
+  -h, --help    Show this help message.
 
 Examples:
   $0
   $0 -unicast
   $0 -ekf
-  $0 -unicast -ekf
+  $0 -fastforward
+  $0 -unicast -ekf -fastforward
   $0 -unicast mapping:=false
 EOF
 }
@@ -43,6 +47,9 @@ while [[ $# -gt 0 ]]; do
       ;;
     -ekf)
       USE_EKF=true
+      ;;
+    -fastforward)
+      USE_FASTFORWARD=true
       ;;
     -h|--help)
       show_usage
@@ -57,6 +64,10 @@ done
 
 if [[ "${USE_EKF}" == "true" ]]; then
   LAUNCH_ARGS+=("ekf:=true")
+fi
+
+if [[ "${USE_FASTFORWARD}" == "true" ]]; then
+  LAUNCH_ARGS+=("fastforward:=true")
 fi
 
 if [[ ! -f "${ROS_SETUP}" ]]; then
@@ -95,6 +106,10 @@ fi
 
 if [[ "${USE_EKF}" == "true" ]]; then
   echo "Launching with EKF enabled: ekf:=true"
+fi
+
+if [[ "${USE_FASTFORWARD}" == "true" ]]; then
+  echo "Launching with fastforward enabled: fastforward:=true"
 fi
 
 exec ros2 launch charlie_bringup bringup.launch.py "${LAUNCH_ARGS[@]}"
