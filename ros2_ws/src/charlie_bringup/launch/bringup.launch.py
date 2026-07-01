@@ -16,6 +16,7 @@ def generate_launch_description():
     baud_rate = LaunchConfiguration("baud_rate")
     wheel_separation = LaunchConfiguration("wheel_separation")
     cmd_timeout_s = LaunchConfiguration("cmd_timeout_s")
+    fastforward = LaunchConfiguration("fastforward")
 
     video_device = LaunchConfiguration("video_device")
     pixel_format = LaunchConfiguration("pixel_format")
@@ -31,6 +32,12 @@ def generate_launch_description():
     base_publish_tf = ParameterValue(
         PythonExpression(["'", ekf, "' != 'true'"]),
         value_type=bool,
+    )
+    effective_cmd_timeout_s = ParameterValue(
+        PythonExpression([
+            "20.0 if '", fastforward, "' == 'true' else ", cmd_timeout_s,
+        ]),
+        value_type=float,
     )
 
     web_dashboard_camera_launch = PathJoinSubstitution([
@@ -84,8 +91,14 @@ def generate_launch_description():
 
         DeclareLaunchArgument(
             "cmd_timeout_s",
-            default_value="20.0",
-            description="Seconds before base driver stops after /cmd_vel loss. Use short values for normal deadman operation.",
+            default_value="0.5",
+            description="Seconds before base driver stops after /cmd_vel loss when fastforward is false.",
+        ),
+
+        DeclareLaunchArgument(
+            "fastforward",
+            default_value="false",
+            description="Use a 20 second /cmd_vel timeout for straight hallway Wi-Fi dropout mapping tests.",
         ),
 
         DeclareLaunchArgument(
@@ -127,7 +140,7 @@ def generate_launch_description():
                 "serial_port": serial_port,
                 "baud_rate": baud_rate,
                 "wheel_separation": wheel_separation,
-                "cmd_timeout_s": cmd_timeout_s,
+                "cmd_timeout_s": effective_cmd_timeout_s,
                 "command_rate_hz": 50.0,
                 "odom_frame": "odom",
                 "base_frame": "base_link",
