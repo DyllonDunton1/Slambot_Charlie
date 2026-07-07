@@ -96,10 +96,11 @@
             <div id="waypoint-control-section" class="control-section hidden-section">
                 <h3>Waypoint Navigation</h3>
                 <p class="hint">
-                    Click on the map to add waypoints. Compute the path first, then start navigation.
+                    Set Charlie's initial pose first. Then click on the map to add waypoints, compute the path, and start navigation.
                 </p>
 
                 <div class="nav-buttons">
+                    <button id="set-initial-pose-click">Set Initial Pose</button>
                     <button id="compute-path">Compute Path</button>
                     <button id="follow-path" class="primary-action">Follow Path</button>
                     <button id="clear-waypoints">Clear Waypoints</button>
@@ -180,5 +181,6 @@
     </main>
 
     <script src="/static/main.js?v=10"></script>
+    <script src="/static/initial_pose.js?v=1"></script>
 </body>
 </html>
