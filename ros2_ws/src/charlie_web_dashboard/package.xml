@@ -3,13 +3,15 @@
 <package format="3">
   <name>charlie_web_dashboard</name>
   <version>0.0.0</version>
-  <description>TODO: Package description</description>
+  <description>Web dashboard and ROS interface for Charlie.</description>
   <maintainer email="duntondyllon@gmail.com">Dyllon Dunton</maintainer>
   <license>MIT</license>
 
   <depend>rclpy</depend>
+  <depend>action_msgs</depend>
   <depend>geometry_msgs</depend>
   <depend>nav_msgs</depend>
+  <depend>nav2_msgs</depend>
   <depend>std_msgs</depend>
   <depend>sensor_msgs</depend>
   <depend>cv_bridge</depend>
