@@ -2,6 +2,25 @@ const navMessageBuffer = [];
 const navMessageKeys = new Set();
 const navMessageLimit = 12;
 
+function ensureNavMessageBufferElement() {
+    let element = document.getElementById("nav-message-buffer");
+    if (element) {
+        return element;
+    }
+
+    const navStatusElement = document.getElementById("nav-status");
+    if (!navStatusElement || !navStatusElement.parentElement) {
+        return null;
+    }
+
+    element = document.createElement("div");
+    element.id = "nav-message-buffer";
+    element.className = "nav-message-buffer";
+    element.textContent = "Nav messages: none yet.";
+    navStatusElement.insertAdjacentElement("afterend", element);
+    return element;
+}
+
 function navMessageTimestamp() {
     return new Date().toLocaleTimeString([], {
         hour: "2-digit",
@@ -59,7 +78,7 @@ function addNavMessage(text, mode = "normal") {
 }
 
 function renderNavMessageBuffer() {
-    const element = document.getElementById("nav-message-buffer");
+    const element = ensureNavMessageBufferElement();
     if (!element) {
         return;
     }
