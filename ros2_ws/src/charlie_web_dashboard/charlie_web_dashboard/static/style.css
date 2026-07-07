@@ -197,7 +197,8 @@ pre {
 .tuning-status,
 .checkpoint-status,
 .imu-status,
-.nav-status {
+.nav-status,
+.nav-message-buffer {
     margin-bottom: 8px;
     padding: 8px 10px;
     border-radius: 8px;
@@ -213,7 +214,8 @@ pre {
 .tuning-status.active,
 .checkpoint-status.active,
 .imu-status.active,
-.nav-status.active {
+.nav-status.active,
+.nav-message-buffer.active {
     color: #9cff9c;
     border-color: #2d6a2d;
 }
@@ -224,9 +226,46 @@ pre {
 .tuning-status.error,
 .checkpoint-status.error,
 .imu-status.error,
-.nav-status.error {
+.nav-status.error,
+.nav-message-buffer.error {
     color: #ff9c9c;
     border-color: #7a2d2d;
+}
+
+.nav-message-buffer {
+    min-height: 72px;
+    max-height: 160px;
+    overflow-y: auto;
+    font-size: 12px;
+    line-height: 1.35;
+}
+
+.nav-message-row {
+    display: grid;
+    grid-template-columns: 72px 1fr;
+    gap: 8px;
+    padding: 2px 0;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.nav-message-row:last-child {
+    border-bottom: none;
+}
+
+.nav-message-row.active {
+    color: #9ccfff;
+}
+
+.nav-message-row.error {
+    color: #ff9c9c;
+}
+
+.nav-message-time {
+    color: #888;
+}
+
+.nav-message-text {
+    overflow-wrap: anywhere;
 }
 
 .map-container {
@@ -267,10 +306,22 @@ pre {
     opacity: 0.9;
 }
 
+.planned-path-line-blue {
+    stroke: #1e88ff;
+    stroke-width: 3;
+    opacity: 0.95;
+}
+
 .waypoint-dot {
     fill: #ffd447;
     stroke: #111;
     stroke-width: 2;
+}
+
+.waypoint-dot-blue {
+    fill: #1e88ff;
+    stroke: #ffffff;
+    stroke-width: 1.5;
 }
 
 .waypoint-label {
@@ -280,6 +331,13 @@ pre {
     font-size: 15px;
     font-family: monospace;
     font-weight: bold;
+}
+
+.waypoint-label-blue {
+    fill: #9ccfff;
+    stroke: #111;
+    font-size: 12px;
+    stroke-width: 0.5;
 }
 
 #robot-marker {
