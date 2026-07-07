@@ -2,10 +2,13 @@ from datetime import datetime
 from pathlib import Path
 import time
 
+import cv2
+import numpy as np
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse, StreamingResponse, Response
 from fastapi.staticfiles import StaticFiles
 from geometry_msgs.msg import PoseWithCovarianceStamped
+from nav_msgs.msg import OccupancyGrid
 from pydantic import BaseModel
 
 
@@ -76,6 +79,133 @@ def occupancy_grid_to_pgm_bytes(msg, occupied_thresh: float = 0.65, free_thresh:
 
     header = f"P5\n# CREATOR: Charlie web dashboard\n{width} {height}\n255\n".encode("ascii")
     return header + bytes(pixels)
+
+
+def costmap_grid_to_overlay_png(msg: OccupancyGrid) -> bytes:
+    """Convert a Nav2 costmap OccupancyGrid into a transparent overlay PNG.
+
+    This intentionally differs from the normal map image. Free cells are fully
+    transparent so the saved/static map remains visible. Unknown cells are faint
+    gray, inflated/high-cost cells are orange, and lethal cells are red.
+    """
+    width = int(msg.info.width)
+    height = int(msg.info.height)
+
+    if width <= 0 or height <= 0:
+        raise ValueError("Costmap width or height is zero")
+
+    grid = np.array(msg.data, dtype=np.int16).reshape((height, width))
+
+    # OpenCV encodes four-channel PNGs as BGRA.
+    overlay = np.zeros((height, width, 4), dtype=np.uint8)
+
+    unknown_mask = grid < 0
+    inflated_mask = (grid > 0) & (grid < 100)
+    lethal_mask = grid >= 100
+
+    overlay[unknown_mask] = [128, 128, 128, 70]
+
+    if np.any(inflated_mask):
+        costs = grid[inflated_mask].astype(np.float32)
+        alpha = np.clip(45.0 + costs * 1.35, 50.0, 180.0).astype(np.uint8)
+        overlay[inflated_mask, 0] = 0      # B
+        overlay[inflated_mask, 1] = 165    # G
+        overlay[inflated_mask, 2] = 255    # R
+        overlay[inflated_mask, 3] = alpha  # A
+
+    overlay[lethal_mask] = [0, 0, 255, 220]
+
+    # ROS map origin is bottom-left-ish; image origin is top-left.
+    overlay = np.flipud(overlay)
+
+    success, encoded = cv2.imencode(".png", overlay)
+
+    if not success:
+        raise RuntimeError("cv2.imencode failed for global costmap overlay PNG")
+
+    return encoded.tobytes()
+
+
+def ensure_global_costmap_subscription(ros_interface):
+    topic = "/global_costmap/costmap"
+
+    if getattr(ros_interface, "global_costmap_sub", None) is not None:
+        return
+
+    with ros_interface.lock:
+        ros_interface.latest_global_costmap_png = None
+        ros_interface.last_global_costmap_time = None
+        ros_interface.global_costmap_metadata = {
+            "received": False,
+            "topic": topic,
+            "frame_id": "",
+            "width": 0,
+            "height": 0,
+            "resolution": 0.0,
+            "origin_x": 0.0,
+            "origin_y": 0.0,
+            "last_update_age_s": None,
+        }
+
+    def global_costmap_callback(msg: OccupancyGrid):
+        now = time.monotonic()
+
+        try:
+            png_bytes = costmap_grid_to_overlay_png(msg)
+        except Exception as exc:
+            ros_interface.get_logger().warn(f"Global costmap PNG conversion failed: {exc}")
+            return
+
+        with ros_interface.lock:
+            ros_interface.latest_global_costmap_png = png_bytes
+            ros_interface.last_global_costmap_time = now
+            ros_interface.global_costmap_metadata = {
+                "received": True,
+                "topic": topic,
+                "frame_id": msg.header.frame_id,
+                "width": int(msg.info.width),
+                "height": int(msg.info.height),
+                "resolution": float(msg.info.resolution),
+                "origin_x": float(msg.info.origin.position.x),
+                "origin_y": float(msg.info.origin.position.y),
+                "last_update_age_s": 0.0,
+            }
+
+    ros_interface.global_costmap_sub = ros_interface.create_subscription(
+        OccupancyGrid,
+        topic,
+        global_costmap_callback,
+        10,
+    )
+    ros_interface.get_logger().info(f"Subscribing Nav2 global costmap on {topic}")
+
+
+def get_global_costmap_png(ros_interface):
+    with ros_interface.lock:
+        return getattr(ros_interface, "latest_global_costmap_png", None)
+
+
+def get_global_costmap_status(ros_interface):
+    now = time.monotonic()
+
+    with ros_interface.lock:
+        metadata = dict(getattr(ros_interface, "global_costmap_metadata", {
+            "received": False,
+            "topic": "/global_costmap/costmap",
+            "frame_id": "",
+            "width": 0,
+            "height": 0,
+            "resolution": 0.0,
+            "origin_x": 0.0,
+            "origin_y": 0.0,
+            "last_update_age_s": None,
+        }))
+        last_time = getattr(ros_interface, "last_global_costmap_time", None)
+
+    if last_time is not None:
+        metadata["last_update_age_s"] = now - last_time
+
+    return metadata
 
 
 def save_latest_nav_map(ros_interface):
@@ -193,6 +323,8 @@ def publish_initial_pose(ros_interface, req: InitialPoseRequest):
 
 
 def create_app(ros_interface, package_share_dir: Path) -> FastAPI:
+    ensure_global_costmap_subscription(ros_interface)
+
     app = FastAPI(title="Charlie Web Dashboard")
 
     static_dir = package_share_dir / "static"
@@ -298,6 +430,26 @@ def create_app(ros_interface, package_share_dir: Path) -> FastAPI:
             content=png_bytes,
             media_type="image/png",
         )
+
+    @app.get("/api/costmap/global/image")
+    def global_costmap_image():
+        png_bytes = get_global_costmap_png(ros_interface)
+
+        if png_bytes is None:
+            return Response(
+                content="No /global_costmap/costmap has been received yet.",
+                status_code=404,
+                media_type="text/plain",
+            )
+
+        return Response(
+            content=png_bytes,
+            media_type="image/png",
+        )
+
+    @app.get("/api/costmap/global/status")
+    def global_costmap_status():
+        return get_global_costmap_status(ros_interface)
 
     @app.get("/api/map/download")
     def download_map_png():
