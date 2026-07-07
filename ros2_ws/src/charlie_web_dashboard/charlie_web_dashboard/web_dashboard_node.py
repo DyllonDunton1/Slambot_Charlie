@@ -28,8 +28,8 @@ def main(args=None):
     package_share_dir = Path(__file__).parent
     app = create_app(ros_interface, package_share_dir)
 
-    web_host = "0.0.0.0"
-    web_port = 8000
+    web_host = str(ros_interface.get_parameter("web_host").value)
+    web_port = int(ros_interface.get_parameter("web_port").value)
 
     ros_thread = threading.Thread(
         target=spin_ros_node,
