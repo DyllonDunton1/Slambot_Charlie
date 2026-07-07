@@ -12,20 +12,26 @@ import cv2
 from cv_bridge import CvBridge
 
 import rclpy
-from rclpy.node import Node
+from rclpy.action import ActionClient
 from rclpy.duration import Duration
+from rclpy.node import Node
 
 import tf2_ros
 from tf2_ros import TransformException
 
-from geometry_msgs.msg import Twist, Pose2D
-from nav_msgs.msg import Odometry, OccupancyGrid
+from action_msgs.msg import GoalStatus
+from geometry_msgs.msg import Twist, Pose2D, PoseStamped
+from nav_msgs.msg import Odometry, OccupancyGrid, Path as NavPath
+from nav2_msgs.action import ComputePathThroughPoses, NavigateThroughPoses
 from sensor_msgs.msg import Image, Imu, BatteryState
 from std_msgs.msg import String
 from slam_toolbox.srv import SerializePoseGraph, DeserializePoseGraph
 
 
 class CharlieRosInterface(Node):
+    CONTROL_MODE_MANUAL = "manual"
+    CONTROL_MODE_WAYPOINT_NAV = "waypoint_nav"
+
     def __init__(self):
         super().__init__("charlie_web_dashboard")
 
@@ -35,9 +41,14 @@ class CharlieRosInterface(Node):
         self.declare_parameter("debug_topic", "/base_debug")
         self.declare_parameter("camera_topic", "/camera/image_raw")
         self.declare_parameter("map_topic", "/map")
+        self.declare_parameter("plan_topic", "/plan")
         self.declare_parameter("tuning_command_topic", "/base_tuning_command")
         self.declare_parameter("imu_topic", "/imu/data")
         self.declare_parameter("battery_topic", "/battery/state")
+
+        # Nav2 actions
+        self.declare_parameter("compute_path_action", "/compute_path_through_poses")
+        self.declare_parameter("navigate_through_poses_action", "/navigate_through_poses")
 
         # Command behavior
         self.declare_parameter("cmd_publish_rate_hz", 10.0)
@@ -49,16 +60,23 @@ class CharlieRosInterface(Node):
         self.declare_parameter("jpeg_quality", 70)
 
         # Logging behavior
-        self.declare_parameter("max_debug_log_samples", 20000)        
+        self.declare_parameter("max_debug_log_samples", 20000)
+
+        # Web behavior. These are read by web_dashboard_node.py after this node is constructed.
+        self.declare_parameter("web_host", "0.0.0.0")
+        self.declare_parameter("web_port", 8000)
 
         self.cmd_vel_topic = self.get_parameter("cmd_vel_topic").value
         self.odom_topic = self.get_parameter("odom_topic").value
         self.debug_topic = self.get_parameter("debug_topic").value
         self.camera_topic = self.get_parameter("camera_topic").value
         self.map_topic = self.get_parameter("map_topic").value
+        self.plan_topic = self.get_parameter("plan_topic").value
         self.tuning_command_topic = self.get_parameter("tuning_command_topic").value
         self.imu_topic = self.get_parameter("imu_topic").value
         self.battery_topic = self.get_parameter("battery_topic").value
+        self.compute_path_action = self.get_parameter("compute_path_action").value
+        self.navigate_through_poses_action = self.get_parameter("navigate_through_poses_action").value
 
         self.cmd_publish_rate_hz = float(self.get_parameter("cmd_publish_rate_hz").value)
         self.cmd_timeout_s = float(self.get_parameter("cmd_timeout_s").value)
@@ -68,6 +86,9 @@ class CharlieRosInterface(Node):
         self.max_debug_log_samples = int(self.get_parameter("max_debug_log_samples").value)
 
         self.lock = threading.Lock()
+
+        # Control mode state. Manual is intentionally the safe default.
+        self.control_mode = self.CONTROL_MODE_MANUAL
 
         # Manual command state
         self.target_linear_x = 0.0
@@ -127,6 +148,21 @@ class CharlieRosInterface(Node):
             "last_update_age_s": None,
         }
 
+        # Nav path / waypoint state
+        self.waypoints = []
+        self.latest_nav_path = None
+        self.last_nav_path_time = None
+        self.nav_status = {
+            "state": "idle",
+            "message": "No waypoint navigation action yet.",
+            "active": False,
+            "distance_remaining": None,
+            "number_of_poses_remaining": None,
+            "last_update_age_s": None,
+        }
+        self.last_nav_status_time = None
+        self.nav_goal_handle = None
+
         # Base debug state
         self.debug_string = "{}"
         self.debug_data = {}
@@ -177,7 +213,6 @@ class CharlieRosInterface(Node):
             "/slam_toolbox/deserialize_map",
         )
 
-
         # Publishers
         self.cmd_vel_pub = self.create_publisher(
             Twist,
@@ -191,12 +226,23 @@ class CharlieRosInterface(Node):
             10,
         )
 
-
-        # Transform listeneres
+        # Transform listener
         self.tf_buffer = tf2_ros.Buffer(
             cache_time=Duration(seconds=60.0)
         )
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
+
+        # Action clients
+        self.compute_path_client = ActionClient(
+            self,
+            ComputePathThroughPoses,
+            self.compute_path_action,
+        )
+        self.navigate_client = ActionClient(
+            self,
+            NavigateThroughPoses,
+            self.navigate_through_poses_action,
+        )
 
         # Subscribers
         self.odom_sub = self.create_subscription(
@@ -227,6 +273,13 @@ class CharlieRosInterface(Node):
             10,
         )
 
+        self.plan_sub = self.create_subscription(
+            NavPath,
+            self.plan_topic,
+            self.plan_callback,
+            10,
+        )
+
         self.debug_sub = self.create_subscription(
             String,
             self.debug_topic,
@@ -253,11 +306,12 @@ class CharlieRosInterface(Node):
         )
 
         self.get_logger().info("Charlie web dashboard ROS interface started")
-        self.get_logger().info(f"Publishing cmd_vel on {self.cmd_vel_topic}")
+        self.get_logger().info(f"Publishing manual cmd_vel on {self.cmd_vel_topic}")
         self.get_logger().info(f"Subscribing odom on {self.odom_topic}")
         self.get_logger().info(f"Subscribing debug on {self.debug_topic}")
         self.get_logger().info(f"Subscribing camera on {self.camera_topic}")
         self.get_logger().info(f"Subscribing map on {self.map_topic}")
+        self.get_logger().info(f"Subscribing Nav2 plan on {self.plan_topic}")
         self.get_logger().info(f"Publishing tuning commands on {self.tuning_command_topic}")
         self.get_logger().info("Mapping checkpoint services configured")
         self.get_logger().info("serialize_map service: /slam_toolbox/serialize_map")
@@ -265,6 +319,8 @@ class CharlieRosInterface(Node):
         self.get_logger().info(f"Checkpoint root: {self.checkpoint_root}")
         self.get_logger().info(f"Subscribing IMU on {self.imu_topic}")
         self.get_logger().info(f"Subscribing battery on {self.battery_topic}")
+        self.get_logger().info(f"Nav2 compute path action: {self.compute_path_action}")
+        self.get_logger().info(f"Nav2 navigate-through-poses action: {self.navigate_through_poses_action}")
 
     def set_manual_command(self, linear_x: float, angular_z: float):
         linear_x = self.clamp(
@@ -279,15 +335,74 @@ class CharlieRosInterface(Node):
         )
 
         with self.lock:
+            if self.control_mode != self.CONTROL_MODE_MANUAL:
+                return {
+                    "ok": True,
+                    "accepted": False,
+                    "mode": self.control_mode,
+                    "message": "Manual command ignored because dashboard is not in manual mode.",
+                }
+
             self.target_linear_x = linear_x
             self.target_angular_z = angular_z
             self.last_command_time = time.monotonic()
 
+        return {
+            "ok": True,
+            "accepted": True,
+            "mode": self.CONTROL_MODE_MANUAL,
+            "linear_x": linear_x,
+            "angular_z": angular_z,
+        }
+
+    def set_control_mode(self, mode: str):
+        mode = (mode or "").strip()
+
+        if mode not in (self.CONTROL_MODE_MANUAL, self.CONTROL_MODE_WAYPOINT_NAV):
+            return {
+                "ok": False,
+                "message": f"Invalid control mode: {mode}",
+                "valid_modes": [self.CONTROL_MODE_MANUAL, self.CONTROL_MODE_WAYPOINT_NAV],
+            }
+
+        with self.lock:
+            self.control_mode = mode
+            self.target_linear_x = 0.0
+            self.target_angular_z = 0.0
+            self.last_command_time = time.monotonic()
+
+        # Publish a single zero command when modes switch so stale manual commands do
+        # not linger at the base driver.
+        self.publish_zero_cmd_vel_once()
+
+        if mode == self.CONTROL_MODE_MANUAL:
+            self.cancel_navigation(set_manual_mode=False)
+
+        return {
+            "ok": True,
+            "mode": mode,
+            "message": f"Control mode set to {mode}.",
+        }
+
     def stop(self):
-        self.set_manual_command(0.0, 0.0)
+        with self.lock:
+            self.control_mode = self.CONTROL_MODE_MANUAL
+            self.target_linear_x = 0.0
+            self.target_angular_z = 0.0
+            self.last_command_time = time.monotonic()
+
+        self.cancel_navigation(set_manual_mode=False)
+        self.publish_zero_cmd_vel_once()
+
+    def publish_zero_cmd_vel_once(self):
+        msg = Twist()
+        self.cmd_vel_pub.publish(msg)
 
     def publish_cmd_vel(self):
         with self.lock:
+            if self.control_mode != self.CONTROL_MODE_MANUAL:
+                return
+
             command_age = time.monotonic() - self.last_command_time
 
             if command_age > self.cmd_timeout_s:
@@ -318,7 +433,7 @@ class CharlieRosInterface(Node):
                 "angular_z": msg.twist.twist.angular.z,
                 "last_update_age_s": 0.0,
             }
-    
+
     def imu_callback(self, msg: Imu):
         now = time.monotonic()
         gz = msg.angular_velocity.z
@@ -381,6 +496,10 @@ class CharlieRosInterface(Node):
                 "last_update_age_s": 0.0,
             }
 
+    def plan_callback(self, msg: NavPath):
+        with self.lock:
+            self.latest_nav_path = msg
+            self.last_nav_path_time = time.monotonic()
 
     def occupancy_grid_to_png(self, msg: OccupancyGrid) -> bytes:
         width = msg.info.width
@@ -421,11 +540,9 @@ class CharlieRosInterface(Node):
 
         return encoded.tobytes()
 
-
     def get_latest_map_png(self):
         with self.lock:
             return self.latest_map_png
-
 
     def get_map_png_filename(self):
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -456,16 +573,14 @@ class CharlieRosInterface(Node):
 
         sample = {
             "time_s": now - self.debug_log_start_time,
-
             "cmd_linear_x": self.target_linear_x,
             "cmd_angular_z": self.target_angular_z,
-
+            "control_mode": self.control_mode,
             "odom_x": self.odom_state.get("x", 0.0),
             "odom_y": self.odom_state.get("y", 0.0),
             "odom_yaw": self.odom_state.get("yaw", 0.0),
             "odom_linear_x": self.odom_state.get("linear_x", 0.0),
             "odom_angular_z": self.odom_state.get("angular_z", 0.0),
-
             "imu_yaw_rate_radps": self.imu_state.get("angular_velocity_z_radps", 0.0),
             "imu_yaw_rate_dps": self.imu_state.get("angular_velocity_z_dps", 0.0),
         }
@@ -525,10 +640,9 @@ class CharlieRosInterface(Node):
 
         preferred_fields = [
             "time_s",
-
+            "control_mode",
             "cmd_linear_x",
             "cmd_angular_z",
-
             "left_target_mps",
             "right_target_mps",
             "left_measured_mps",
@@ -539,13 +653,11 @@ class CharlieRosInterface(Node):
             "right_integral_error_mps",
             "left_correction",
             "right_correction",
-
             "odom_x",
             "odom_y",
             "odom_yaw",
             "odom_linear_x",
             "odom_angular_z",
-
             "imu_yaw_rate_radps",
             "imu_yaw_rate_dps",
         ]
@@ -600,7 +712,7 @@ class CharlieRosInterface(Node):
     def get_latest_jpeg(self):
         with self.lock:
             return self.latest_jpeg
-    
+
     def send_tuning_command(
         self,
         kp=None,
@@ -669,6 +781,375 @@ class CharlieRosInterface(Node):
                 self.robot_pose_state["received"] = False
                 self.robot_pose_state["error"] = str(exc)
 
+    def add_waypoint(self, x: float, y: float, yaw: float = 0.0):
+        waypoint = {
+            "x": float(x),
+            "y": float(y),
+            "yaw": float(yaw),
+            "yaw_deg": math.degrees(float(yaw)),
+        }
+
+        with self.lock:
+            self.waypoints.append(waypoint)
+            count = len(self.waypoints)
+
+        return {
+            "ok": True,
+            "message": f"Added waypoint {count}.",
+            "waypoint": waypoint,
+            "waypoint_count": count,
+        }
+
+    def clear_waypoints(self):
+        with self.lock:
+            self.waypoints = []
+            self.latest_nav_path = None
+            self.last_nav_path_time = None
+
+        return {
+            "ok": True,
+            "message": "Cleared waypoints and planned path.",
+            "waypoint_count": 0,
+        }
+
+    def compute_waypoint_path(self):
+        with self.lock:
+            waypoints = list(self.waypoints)
+
+        if not waypoints:
+            return {
+                "ok": False,
+                "message": "Add at least one waypoint before computing a path.",
+            }
+
+        if not self.compute_path_client.wait_for_server(timeout_sec=2.0):
+            return {
+                "ok": False,
+                "message": f"Nav2 compute path action is not available: {self.compute_path_action}",
+            }
+
+        goal_msg = ComputePathThroughPoses.Goal()
+        goal_msg.goals = self.waypoints_to_pose_stamped_list(waypoints)
+        goal_msg.use_start = False
+        goal_msg.planner_id = ""
+
+        try:
+            goal_future = self.compute_path_client.send_goal_async(goal_msg)
+            goal_handle = self.wait_for_future(goal_future, timeout_s=5.0)
+
+            if not goal_handle.accepted:
+                return {
+                    "ok": False,
+                    "message": "Nav2 planner rejected the compute-path request.",
+                }
+
+            result_future = goal_handle.get_result_async()
+            wrapped_result = self.wait_for_future(result_future, timeout_s=10.0)
+            path_msg = wrapped_result.result.path
+
+            with self.lock:
+                self.latest_nav_path = path_msg
+                self.last_nav_path_time = time.monotonic()
+
+            path_state = self.path_msg_to_state(path_msg)
+
+            return {
+                "ok": True,
+                "message": f"Computed path through {len(waypoints)} waypoint(s).",
+                "path_pose_count": len(path_state["poses"]),
+                "path": path_state,
+            }
+
+        except Exception as exc:
+            return {
+                "ok": False,
+                "message": f"Failed to compute path: {exc}",
+            }
+
+    def follow_waypoints(self):
+        with self.lock:
+            waypoints = list(self.waypoints)
+            self.control_mode = self.CONTROL_MODE_WAYPOINT_NAV
+            self.target_linear_x = 0.0
+            self.target_angular_z = 0.0
+            self.last_command_time = time.monotonic()
+
+        if not waypoints:
+            return {
+                "ok": False,
+                "message": "Add at least one waypoint before starting navigation.",
+            }
+
+        if not self.navigate_client.wait_for_server(timeout_sec=2.0):
+            with self.lock:
+                self.control_mode = self.CONTROL_MODE_MANUAL
+            return {
+                "ok": False,
+                "message": f"Nav2 navigate-through-poses action is not available: {self.navigate_through_poses_action}",
+            }
+
+        goal_msg = NavigateThroughPoses.Goal()
+        goal_msg.poses = self.waypoints_to_pose_stamped_list(waypoints)
+        goal_msg.behavior_tree = ""
+
+        with self.lock:
+            self.nav_status = {
+                "state": "sending",
+                "message": f"Sending {len(waypoints)} waypoint(s) to Nav2.",
+                "active": False,
+                "distance_remaining": None,
+                "number_of_poses_remaining": len(waypoints),
+                "last_update_age_s": 0.0,
+            }
+            self.last_nav_status_time = time.monotonic()
+
+        try:
+            goal_future = self.navigate_client.send_goal_async(
+                goal_msg,
+                feedback_callback=self.nav_feedback_callback,
+            )
+            goal_future.add_done_callback(self.nav_goal_response_callback)
+
+            return {
+                "ok": True,
+                "message": f"Waypoint navigation request sent with {len(waypoints)} waypoint(s).",
+                "waypoint_count": len(waypoints),
+                "mode": self.CONTROL_MODE_WAYPOINT_NAV,
+            }
+
+        except Exception as exc:
+            with self.lock:
+                self.control_mode = self.CONTROL_MODE_MANUAL
+                self.nav_status = {
+                    "state": "error",
+                    "message": f"Failed to send navigation goal: {exc}",
+                    "active": False,
+                    "distance_remaining": None,
+                    "number_of_poses_remaining": None,
+                    "last_update_age_s": 0.0,
+                }
+                self.last_nav_status_time = time.monotonic()
+
+            return {
+                "ok": False,
+                "message": f"Failed to send navigation goal: {exc}",
+            }
+
+    def cancel_navigation(self, set_manual_mode: bool = True):
+        with self.lock:
+            goal_handle = self.nav_goal_handle
+            self.nav_goal_handle = None
+
+            if set_manual_mode:
+                self.control_mode = self.CONTROL_MODE_MANUAL
+                self.target_linear_x = 0.0
+                self.target_angular_z = 0.0
+                self.last_command_time = time.monotonic()
+
+            self.nav_status = {
+                "state": "canceling" if goal_handle is not None else "idle",
+                "message": "Canceling navigation goal." if goal_handle is not None else "No active navigation goal.",
+                "active": False,
+                "distance_remaining": None,
+                "number_of_poses_remaining": None,
+                "last_update_age_s": 0.0,
+            }
+            self.last_nav_status_time = time.monotonic()
+
+        if goal_handle is not None:
+            try:
+                cancel_future = goal_handle.cancel_goal_async()
+                cancel_future.add_done_callback(self.nav_cancel_done_callback)
+            except Exception as exc:
+                with self.lock:
+                    self.nav_status["state"] = "error"
+                    self.nav_status["message"] = f"Failed to cancel navigation goal: {exc}"
+                    self.last_nav_status_time = time.monotonic()
+
+        self.publish_zero_cmd_vel_once()
+
+        return {
+            "ok": True,
+            "message": "Navigation cancel requested.",
+            "mode": self.control_mode,
+        }
+
+    def nav_goal_response_callback(self, future):
+        try:
+            goal_handle = future.result()
+        except Exception as exc:
+            with self.lock:
+                self.control_mode = self.CONTROL_MODE_MANUAL
+                self.nav_status = {
+                    "state": "error",
+                    "message": f"Navigation goal response failed: {exc}",
+                    "active": False,
+                    "distance_remaining": None,
+                    "number_of_poses_remaining": None,
+                    "last_update_age_s": 0.0,
+                }
+                self.last_nav_status_time = time.monotonic()
+            return
+
+        if not goal_handle.accepted:
+            with self.lock:
+                self.control_mode = self.CONTROL_MODE_MANUAL
+                self.nav_goal_handle = None
+                self.nav_status = {
+                    "state": "rejected",
+                    "message": "Nav2 rejected the waypoint navigation goal.",
+                    "active": False,
+                    "distance_remaining": None,
+                    "number_of_poses_remaining": None,
+                    "last_update_age_s": 0.0,
+                }
+                self.last_nav_status_time = time.monotonic()
+            self.publish_zero_cmd_vel_once()
+            return
+
+        with self.lock:
+            self.nav_goal_handle = goal_handle
+            self.nav_status = {
+                "state": "active",
+                "message": "Nav2 waypoint navigation active.",
+                "active": True,
+                "distance_remaining": None,
+                "number_of_poses_remaining": len(self.waypoints),
+                "last_update_age_s": 0.0,
+            }
+            self.last_nav_status_time = time.monotonic()
+
+        result_future = goal_handle.get_result_async()
+        result_future.add_done_callback(self.nav_result_callback)
+
+    def nav_feedback_callback(self, feedback_msg):
+        feedback = feedback_msg.feedback
+
+        with self.lock:
+            self.nav_status = {
+                "state": "active",
+                "message": "Nav2 waypoint navigation active.",
+                "active": True,
+                "distance_remaining": float(feedback.distance_remaining),
+                "number_of_poses_remaining": int(feedback.number_of_poses_remaining),
+                "number_of_recoveries": int(feedback.number_of_recoveries),
+                "last_update_age_s": 0.0,
+            }
+            self.last_nav_status_time = time.monotonic()
+
+    def nav_result_callback(self, future):
+        try:
+            wrapped_result = future.result()
+            status = wrapped_result.status
+        except Exception as exc:
+            with self.lock:
+                self.control_mode = self.CONTROL_MODE_MANUAL
+                self.nav_goal_handle = None
+                self.nav_status = {
+                    "state": "error",
+                    "message": f"Navigation result failed: {exc}",
+                    "active": False,
+                    "distance_remaining": None,
+                    "number_of_poses_remaining": None,
+                    "last_update_age_s": 0.0,
+                }
+                self.last_nav_status_time = time.monotonic()
+            self.publish_zero_cmd_vel_once()
+            return
+
+        state = self.goal_status_to_string(status)
+        success = status == GoalStatus.STATUS_SUCCEEDED
+
+        with self.lock:
+            self.control_mode = self.CONTROL_MODE_MANUAL
+            self.nav_goal_handle = None
+            self.target_linear_x = 0.0
+            self.target_angular_z = 0.0
+            self.last_command_time = time.monotonic()
+            self.nav_status = {
+                "state": state,
+                "message": "Waypoint navigation succeeded." if success else f"Waypoint navigation finished with status {state}.",
+                "active": False,
+                "distance_remaining": 0.0 if success else None,
+                "number_of_poses_remaining": 0 if success else None,
+                "last_update_age_s": 0.0,
+            }
+            self.last_nav_status_time = time.monotonic()
+
+        self.publish_zero_cmd_vel_once()
+
+    def nav_cancel_done_callback(self, future):
+        try:
+            future.result()
+            message = "Navigation goal canceled."
+        except Exception as exc:
+            message = f"Navigation cancel result failed: {exc}"
+
+        with self.lock:
+            self.control_mode = self.CONTROL_MODE_MANUAL
+            self.nav_goal_handle = None
+            self.nav_status = {
+                "state": "canceled",
+                "message": message,
+                "active": False,
+                "distance_remaining": None,
+                "number_of_poses_remaining": None,
+                "last_update_age_s": 0.0,
+            }
+            self.last_nav_status_time = time.monotonic()
+
+        self.publish_zero_cmd_vel_once()
+
+    def waypoints_to_pose_stamped_list(self, waypoints):
+        return [self.waypoint_to_pose_stamped(waypoint) for waypoint in waypoints]
+
+    def waypoint_to_pose_stamped(self, waypoint):
+        pose = PoseStamped()
+        pose.header.frame_id = "map"
+        pose.header.stamp = self.get_clock().now().to_msg()
+        pose.pose.position.x = float(waypoint["x"])
+        pose.pose.position.y = float(waypoint["y"])
+        pose.pose.position.z = 0.0
+        qx, qy, qz, qw = self.yaw_to_quaternion(float(waypoint.get("yaw", 0.0)))
+        pose.pose.orientation.x = qx
+        pose.pose.orientation.y = qy
+        pose.pose.orientation.z = qz
+        pose.pose.orientation.w = qw
+        return pose
+
+    def path_msg_to_state(self, path_msg):
+        if path_msg is None:
+            return {
+                "received": False,
+                "topic": self.plan_topic,
+                "frame_id": "map",
+                "poses": [],
+                "last_update_age_s": None,
+            }
+
+        poses = []
+        for pose_stamped in path_msg.poses:
+            q = pose_stamped.pose.orientation
+            yaw = self.quaternion_to_yaw(q.x, q.y, q.z, q.w)
+            poses.append({
+                "x": pose_stamped.pose.position.x,
+                "y": pose_stamped.pose.position.y,
+                "yaw": yaw,
+                "yaw_deg": math.degrees(yaw),
+            })
+
+        age = None
+        if self.last_nav_path_time is not None:
+            age = time.monotonic() - self.last_nav_path_time
+
+        return {
+            "received": True,
+            "topic": self.plan_topic,
+            "frame_id": path_msg.header.frame_id,
+            "poses": poses,
+            "last_update_age_s": age,
+        }
+
     def wait_for_service(self, client, service_name: str, timeout_s: float = 2.0) -> bool:
         start = time.monotonic()
 
@@ -681,7 +1162,6 @@ class CharlieRosInterface(Node):
         self.get_logger().warn(f"Service not available: {service_name}")
         return False
 
-
     def wait_for_future(self, future, timeout_s: float = 10.0):
         start = time.monotonic()
 
@@ -691,8 +1171,7 @@ class CharlieRosInterface(Node):
 
             time.sleep(0.05)
 
-        raise TimeoutError("Service call timed out")
-
+        raise TimeoutError("Service/action call timed out")
 
     def get_latest_checkpoint_dir(self):
         if not self.checkpoint_root.exists():
@@ -707,7 +1186,6 @@ class CharlieRosInterface(Node):
             return None
 
         return sorted(checkpoint_dirs, key=lambda p: p.name)[-1]
-
 
     def get_checkpoint_list(self):
         if not self.checkpoint_root.exists():
@@ -737,7 +1215,6 @@ class CharlieRosInterface(Node):
             checkpoints.append(item)
 
         return checkpoints
-
 
     def save_mapping_checkpoint(self):
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -872,7 +1349,6 @@ class CharlieRosInterface(Node):
 
         return result
 
-
     def load_latest_mapping_checkpoint(self):
         checkpoint_dir = self.get_latest_checkpoint_dir()
 
@@ -891,7 +1367,6 @@ class CharlieRosInterface(Node):
             return result
 
         return self.load_mapping_checkpoint(checkpoint_dir.name)
-
 
     def load_mapping_checkpoint(self, checkpoint_name: str):
         checkpoint_dir = self.checkpoint_root / checkpoint_name
@@ -1035,7 +1510,7 @@ class CharlieRosInterface(Node):
 
             if self.last_camera_time is not None:
                 camera_age = now - self.last_camera_time
-            
+
             map_metadata = dict(self.map_metadata)
 
             if self.last_map_time is not None:
@@ -1044,13 +1519,29 @@ class CharlieRosInterface(Node):
             debug_log_duration_s = None
             if self.debug_log_start_time is not None:
                 debug_log_duration_s = now - self.debug_log_start_time
-            
+
             robot_pose = dict(self.robot_pose_state)
 
             if self.last_robot_pose_time is not None:
                 robot_pose["last_update_age_s"] = now - self.last_robot_pose_time
 
+            nav_status = dict(self.nav_status)
+            if self.last_nav_status_time is not None:
+                nav_status["last_update_age_s"] = now - self.last_nav_status_time
+
+            navigation = {
+                "waypoints": list(self.waypoints),
+                "waypoint_count": len(self.waypoints),
+                "path": self.path_msg_to_state(self.latest_nav_path),
+                "status": nav_status,
+            }
+
             status = {
+                "control": {
+                    "mode": self.control_mode,
+                    "manual_enabled": self.control_mode == self.CONTROL_MODE_MANUAL,
+                    "waypoint_nav_enabled": self.control_mode == self.CONTROL_MODE_WAYPOINT_NAV,
+                },
                 "command": {
                     "linear_x": self.target_linear_x,
                     "angular_z": self.target_angular_z,
@@ -1083,6 +1574,7 @@ class CharlieRosInterface(Node):
                 "map": map_metadata,
                 "robot_pose": robot_pose,
                 "checkpoint": dict(self.last_checkpoint_status),
+                "navigation": navigation,
             }
 
             return status
@@ -1092,6 +1584,24 @@ class CharlieRosInterface(Node):
         siny_cosp = 2.0 * (w * z + x * y)
         cosy_cosp = 1.0 - 2.0 * (y * y + z * z)
         return math.atan2(siny_cosp, cosy_cosp)
+
+    @staticmethod
+    def yaw_to_quaternion(yaw: float):
+        half = yaw * 0.5
+        return 0.0, 0.0, math.sin(half), math.cos(half)
+
+    @staticmethod
+    def goal_status_to_string(status: int) -> str:
+        status_map = {
+            GoalStatus.STATUS_UNKNOWN: "unknown",
+            GoalStatus.STATUS_ACCEPTED: "accepted",
+            GoalStatus.STATUS_EXECUTING: "executing",
+            GoalStatus.STATUS_CANCELING: "canceling",
+            GoalStatus.STATUS_SUCCEEDED: "succeeded",
+            GoalStatus.STATUS_CANCELED: "canceled",
+            GoalStatus.STATUS_ABORTED: "aborted",
+        }
+        return status_map.get(status, f"status_{status}")
 
     @staticmethod
     def clamp(value: float, low: float, high: float) -> float:
