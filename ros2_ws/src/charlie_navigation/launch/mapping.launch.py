@@ -8,8 +8,9 @@ from launch_ros.substitutions import FindPackageShare
 
 def generate_launch_description():
     use_sim_time = LaunchConfiguration("use_sim_time")
+    slam_params_file = LaunchConfiguration("params_file")
 
-    slam_params_file = PathJoinSubstitution([
+    default_slam_params_file = PathJoinSubstitution([
         FindPackageShare("charlie_navigation"),
         "config",
         "slam_toolbox.yaml",
@@ -20,6 +21,12 @@ def generate_launch_description():
             "use_sim_time",
             default_value="false",
             description="Use simulation time",
+        ),
+
+        DeclareLaunchArgument(
+            "params_file",
+            default_value=default_slam_params_file,
+            description="slam_toolbox parameter file. Defaults to Charlie's conservative mapping config.",
         ),
 
         Node(
