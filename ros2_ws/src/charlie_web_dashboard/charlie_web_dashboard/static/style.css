@@ -191,6 +191,23 @@ pre {
     padding: 8px 10px;
 }
 
+.costmap-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin: 0;
+    padding: 8px 10px;
+    border-radius: 10px;
+    background: #292929;
+    color: #ddd;
+    font-size: 14px;
+    cursor: pointer;
+}
+
+.costmap-toggle input {
+    margin: 0;
+}
+
 .log-status,
 .map-status,
 .pose-status,
@@ -286,6 +303,18 @@ pre {
     height: 100%;
     object-fit: contain;
     image-rendering: pixelated;
+}
+
+#global-costmap-image {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    image-rendering: pixelated;
+    pointer-events: none;
+    z-index: 1;
+    display: none;
 }
 
 #map-overlay {
