@@ -122,3 +122,14 @@ async function publishInitialPoseFromMapClick(event) {
     // waypoint click.
     mapContainer.addEventListener("click", publishInitialPoseFromMapClick, true);
 })();
+
+(function loadNavDashboardExtras() {
+    if (document.getElementById("nav-dashboard-extras-script")) {
+        return;
+    }
+
+    const script = document.createElement("script");
+    script.id = "nav-dashboard-extras-script";
+    script.src = "/static/nav_dashboard_extras.js?v=1";
+    document.body.appendChild(script);
+})();
