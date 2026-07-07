@@ -1,6 +1,7 @@
 const navMessageBuffer = [];
 const navMessageKeys = new Set();
 const navMessageLimit = 12;
+let latestComputedPathPoseCount = 0;
 
 function ensureNavMessageBufferElement() {
     let element = document.getElementById("nav-message-buffer");
@@ -30,7 +31,7 @@ function navMessageTimestamp() {
 }
 
 function classifyNavMessageMode(text, mode) {
-    if (mode === "error" || /failed|error|rejected|aborted|timeout|unavailable/i.test(text)) {
+    if (mode === "error" || /failed|error|rejected|aborted|timeout|unavailable|empty path|0 poses/i.test(text)) {
         return "error";
     }
 
@@ -116,6 +117,103 @@ function renderNavMessageBuffer() {
     }
 }
 
+function getCurrentPathPoseCount() {
+    const statusPath = latestStatus?.navigation?.path;
+    if (statusPath?.received && Array.isArray(statusPath.poses)) {
+        return statusPath.poses.length;
+    }
+
+    return latestComputedPathPoseCount;
+}
+
+function explainEmptyPath() {
+    return "Compute Path returned an empty path (0 poses). Follow Path was blocked. This usually means the start or a waypoint is outside the free global costmap, inside inflated obstacle space, still in unknown space, or AMCL/map->base_link was not valid when planning ran.";
+}
+
+async function computePathWithValidation(event) {
+    event.preventDefault();
+    event.stopPropagation();
+    event.stopImmediatePropagation();
+
+    try {
+        latestComputedPathPoseCount = 0;
+        setNavStatus("Nav: computing path...");
+        const response = await fetch("/api/nav/compute_path", { method: "POST" });
+        const data = await response.json();
+
+        if (!response.ok || !data.ok) {
+            throw new Error(data.message || `HTTP ${response.status}`);
+        }
+
+        latestComputedPathPoseCount = Number(data.path_pose_count || 0);
+
+        if (latestComputedPathPoseCount < 2) {
+            const message = explainEmptyPath();
+            setNavStatus(`Nav: ${message}`, "error");
+            await updateStatus();
+            addNavMessage(message, "error");
+            return;
+        }
+
+        setNavStatus(`Nav: path computed | poses ${latestComputedPathPoseCount}`, "active");
+        await updateStatus();
+    } catch (error) {
+        console.error("Failed to compute path", error);
+        setNavStatus(`Nav: compute failed | ${error.message}`, "error");
+    }
+}
+
+async function followPathWithValidation(event) {
+    event.preventDefault();
+    event.stopPropagation();
+    event.stopImmediatePropagation();
+
+    const pathPoseCount = getCurrentPathPoseCount();
+    if (pathPoseCount < 2) {
+        const message = "Follow Path blocked because there is no valid computed path yet. Click Compute Path and confirm the blue path appears on the map first.";
+        setNavStatus(`Nav: ${message}`, "error");
+        addNavMessage(message, "error");
+        return;
+    }
+
+    try {
+        setNavStatus("Nav: starting waypoint navigation...");
+        const response = await fetch("/api/nav/follow_path", { method: "POST" });
+        const data = await response.json();
+
+        if (!response.ok || !data.ok) {
+            throw new Error(data.message || `HTTP ${response.status}`);
+        }
+
+        setNavStatus(data.message, "active");
+        await updateStatus();
+    } catch (error) {
+        console.error("Failed to start waypoint navigation", error);
+        setNavStatus(`Nav: start failed | ${error.message}`, "error");
+    }
+}
+
+function installValidatedNavButtonHandlers() {
+    const computeButton = document.getElementById("compute-path");
+    const followButton = document.getElementById("follow-path");
+    const clearButton = document.getElementById("clear-waypoints");
+
+    if (computeButton) {
+        computeButton.addEventListener("click", computePathWithValidation, true);
+    }
+
+    if (followButton) {
+        followButton.addEventListener("click", followPathWithValidation, true);
+    }
+
+    if (clearButton) {
+        clearButton.addEventListener("click", () => {
+            latestComputedPathPoseCount = 0;
+            addNavMessage("Clearing waypoints and computed path.");
+        }, true);
+    }
+}
+
 // Wrap the existing status setter so short-lived button/action responses are
 // preserved even when /api/status polling updates the main Nav line 250 ms later.
 const originalSetNavStatus = setNavStatus;
@@ -154,6 +252,7 @@ updateMapOverlay = function updateMapOverlayBlue(status) {
         }
 
         if (points.length >= 2) {
+            latestComputedPathPoseCount = points.length;
             const polyline = document.createElementNS("http://www.w3.org/2000/svg", "polyline");
             polyline.setAttribute("points", points.join(" "));
             polyline.setAttribute("class", "planned-path-line planned-path-line-blue");
@@ -183,4 +282,5 @@ updateMapOverlay = function updateMapOverlayBlue(status) {
     });
 };
 
+installValidatedNavButtonHandlers();
 renderNavMessageBuffer();
