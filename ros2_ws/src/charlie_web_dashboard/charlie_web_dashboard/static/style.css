@@ -23,6 +23,7 @@ body {
     display: flex;
     justify-content: flex-end;
     align-items: center;
+    gap: 10px;
     padding: 8px 12px 0 12px;
     background: #111;
 }
@@ -31,7 +32,7 @@ body {
     display: inline-flex;
     align-items: center;
     gap: 8px;
-    min-width: 190px;
+    min-width: 150px;
     justify-content: center;
     padding: 8px 12px;
     border-radius: 999px;
@@ -42,9 +43,18 @@ body {
     font-weight: bold;
 }
 
+#battery-pill {
+    min-width: 190px;
+}
+
 .status-pill.active {
     color: #9cff9c;
     border-color: #2d6a2d;
+}
+
+.status-pill.nav-active {
+    color: #9ccfff;
+    border-color: #2d4f7a;
 }
 
 .status-pill.battery-low {
@@ -110,6 +120,15 @@ button:active {
     background: #555;
 }
 
+button.active,
+.mode-button.active {
+    background: #225f96;
+}
+
+.primary-action {
+    background: #226d3d;
+}
+
 .stop {
     background: #b00020;
 }
@@ -150,50 +169,35 @@ pre {
     object-fit: contain;
 }
 
-.debug-log-controls {
+.debug-log-controls,
+.map-controls,
+.checkpoint-buttons,
+.tuning-buttons,
+.mode-toggle,
+.nav-buttons {
     display: flex;
     flex-wrap: wrap;
     gap: 8px;
     margin-bottom: 12px;
 }
 
-.debug-log-controls button {
+.debug-log-controls button,
+.map-controls button,
+.checkpoint-buttons button,
+.tuning-buttons button,
+.mode-toggle button,
+.nav-buttons button {
     font-size: 14px;
     padding: 8px 10px;
 }
 
-.log-status {
-    margin-bottom: 12px;
-    padding: 8px 10px;
-    border-radius: 8px;
-    background: #101010;
-    border: 1px solid #333;
-    color: #ccc;
-    font-family: monospace;
-}
-
-.log-status.active {
-    color: #9cff9c;
-    border-color: #2d6a2d;
-}
-
-.log-status.error {
-    color: #ff9c9c;
-    border-color: #7a2d2d;
-}
-
-.map-controls {
-    display: flex;
-    gap: 8px;
-    margin-bottom: 8px;
-}
-
-.map-controls button {
-    font-size: 14px;
-    padding: 8px 10px;
-}
-
-.map-status {
+.log-status,
+.map-status,
+.pose-status,
+.tuning-status,
+.checkpoint-status,
+.imu-status,
+.nav-status {
     margin-bottom: 8px;
     padding: 8px 10px;
     border-radius: 8px;
@@ -203,12 +207,24 @@ pre {
     font-family: monospace;
 }
 
-.map-status.active {
+.log-status.active,
+.map-status.active,
+.pose-status.active,
+.tuning-status.active,
+.checkpoint-status.active,
+.imu-status.active,
+.nav-status.active {
     color: #9cff9c;
     border-color: #2d6a2d;
 }
 
-.map-status.error {
+.log-status.error,
+.map-status.error,
+.pose-status.error,
+.tuning-status.error,
+.checkpoint-status.error,
+.imu-status.error,
+.nav-status.error {
     color: #ff9c9c;
     border-color: #7a2d2d;
 }
@@ -223,6 +239,7 @@ pre {
     background: #050505;
     border-radius: 8px;
     overflow: hidden;
+    cursor: crosshair;
 }
 
 #map-image {
@@ -232,24 +249,37 @@ pre {
     image-rendering: pixelated;
 }
 
-.pose-status {
-    margin-bottom: 8px;
-    padding: 8px 10px;
-    border-radius: 8px;
-    background: #101010;
-    border: 1px solid #333;
-    color: #ccc;
+#map-overlay {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    z-index: 2;
+}
+
+.planned-path-line {
+    fill: none;
+    stroke: #00d0ff;
+    stroke-width: 3;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    opacity: 0.9;
+}
+
+.waypoint-dot {
+    fill: #ffd447;
+    stroke: #111;
+    stroke-width: 2;
+}
+
+.waypoint-label {
+    fill: #ffd447;
+    stroke: #111;
+    stroke-width: 0.7;
+    font-size: 15px;
     font-family: monospace;
-}
-
-.pose-status.active {
-    color: #9cff9c;
-    border-color: #2d6a2d;
-}
-
-.pose-status.error {
-    color: #ff9c9c;
-    border-color: #7a2d2d;
+    font-weight: bold;
 }
 
 #robot-marker {
@@ -259,6 +289,7 @@ pre {
     transform-origin: center center;
     pointer-events: none;
     display: none;
+    z-index: 3;
 }
 
 .robot-arrow {
@@ -269,6 +300,38 @@ pre {
     border-bottom: 18px solid red;
     transform: rotate(90deg);
     transform-origin: center center;
+}
+
+.control-section {
+    margin-top: 12px;
+}
+
+.active-section {
+    display: block;
+}
+
+.hidden-section {
+    display: none;
+}
+
+.hint {
+    margin: 8px 0 12px 0;
+    color: #bbb;
+    font-size: 14px;
+    line-height: 1.35;
+}
+
+.waypoint-list {
+    white-space: pre-wrap;
+    min-height: 60px;
+    margin-top: 8px;
+    padding: 8px 10px;
+    border-radius: 8px;
+    background: #101010;
+    border: 1px solid #333;
+    color: #ddd;
+    font-family: monospace;
+    font-size: 13px;
 }
 
 .tuning-panel {
@@ -295,100 +358,16 @@ pre {
     padding: 6px;
 }
 
-.tuning-buttons {
-    display: flex;
-    gap: 8px;
-    margin-top: 8px;
-}
-
-.tuning-buttons button {
-    padding: 8px 10px;
-}
-
-.tuning-status {
-    margin-top: 8px;
-    padding: 8px 10px;
-    border-radius: 8px;
-    background: #101010;
-    border: 1px solid #333;
-    color: #ccc;
-    font-family: monospace;
-}
-
-.tuning-status.active {
-    color: #9cff9c;
-    border-color: #2d6a2d;
-}
-
-.tuning-status.error {
-    color: #ff9c9c;
-    border-color: #7a2d2d;
-}
-
-.checkpoint-panel {
-    margin-top: 16px;
-    padding-top: 12px;
-    border-top: 1px solid #333;
-}
-
-.checkpoint-panel h3 {
-    margin-top: 0;
-}
-
-.checkpoint-buttons {
-    display: flex;
-    gap: 8px;
-    margin-top: 8px;
-}
-
-.checkpoint-buttons button {
-    padding: 8px 10px;
-}
-
-.checkpoint-status {
-    margin-top: 8px;
-    padding: 8px 10px;
-    border-radius: 8px;
-    background: #101010;
-    border: 1px solid #333;
-    color: #ccc;
-    font-family: monospace;
-}
-
-.checkpoint-status.active {
-    color: #9cff9c;
-    border-color: #2d6a2d;
-}
-
-.checkpoint-status.error {
-    color: #ff9c9c;
-    border-color: #7a2d2d;
-}
-
-.imu-status {
-    margin-bottom: 12px;
-    padding: 8px 10px;
-    border-radius: 8px;
-    background: #101010;
-    border: 1px solid #333;
-    color: #ccc;
-    font-family: monospace;
-}
-
-.imu-status.active {
-    color: #9cff9c;
-    border-color: #2d6a2d;
-}
-
-.imu-status.error {
-    color: #ff9c9c;
-    border-color: #7a2d2d;
-}
-
 @media (max-width: 800px) {
     .dashboard {
         height: auto;
         grid-template-columns: 1fr;
         grid-template-rows: auto;
+    }
+
+    .top-status-bar {
+        height: auto;
+        flex-wrap: wrap;
+        justify-content: center;
     }
 }
