@@ -11,6 +11,7 @@ class CmdVelRequest(BaseModel):
     linear_x: float = 0.0
     angular_z: float = 0.0
 
+
 class TuningRequest(BaseModel):
     kp: float | None = None
     ki: float | None = None
@@ -18,8 +19,19 @@ class TuningRequest(BaseModel):
     wheel_separation_m: float | None = None
     reset_integral: bool = False
 
+
 class CheckpointLoadRequest(BaseModel):
     name: str | None = None
+
+
+class ControlModeRequest(BaseModel):
+    mode: str
+
+
+class WaypointRequest(BaseModel):
+    x: float
+    y: float
+    yaw: float = 0.0
 
 
 def create_app(ros_interface, package_share_dir: Path) -> FastAPI:
@@ -45,17 +57,16 @@ def create_app(ros_interface, package_share_dir: Path) -> FastAPI:
 
     @app.post("/api/cmd_vel")
     def set_cmd_vel(cmd: CmdVelRequest):
-        ros_interface.set_manual_command(cmd.linear_x, cmd.angular_z)
-        return {
-            "ok": True,
-            "linear_x": cmd.linear_x,
-            "angular_z": cmd.angular_z,
-        }
+        return ros_interface.set_manual_command(cmd.linear_x, cmd.angular_z)
+
+    @app.post("/api/control_mode")
+    def set_control_mode(req: ControlModeRequest):
+        return ros_interface.set_control_mode(req.mode)
 
     @app.post("/api/stop")
     def stop():
         ros_interface.stop()
-        return {"ok": True, "stopped": True}
+        return {"ok": True, "stopped": True, "mode": "manual"}
 
     @app.get("/api/status")
     def status():
@@ -64,7 +75,7 @@ def create_app(ros_interface, package_share_dir: Path) -> FastAPI:
     @app.get("/api/health")
     def health():
         return {"ok": True, "name": "charlie_web_dashboard"}
-    
+
     @app.get("/api/video_feed")
     def video_feed():
         def frame_generator():
@@ -88,7 +99,7 @@ def create_app(ros_interface, package_share_dir: Path) -> FastAPI:
             frame_generator(),
             media_type="multipart/x-mixed-replace; boundary=frame",
         )
-    
+
     @app.post("/api/debug_log/start")
     def start_debug_log():
         return ros_interface.start_debug_log()
@@ -130,7 +141,6 @@ def create_app(ros_interface, package_share_dir: Path) -> FastAPI:
             media_type="image/png",
         )
 
-
     @app.get("/api/map/download")
     def download_map_png():
         png_bytes = ros_interface.get_latest_map_png()
@@ -161,16 +171,14 @@ def create_app(ros_interface, package_share_dir: Path) -> FastAPI:
             wheel_separation_m=req.wheel_separation_m,
             reset_integral=req.reset_integral,
         )
-    
+
     @app.post("/api/checkpoint/save")
     def save_checkpoint():
         return ros_interface.save_mapping_checkpoint()
 
-
     @app.post("/api/checkpoint/load_latest")
     def load_latest_checkpoint():
         return ros_interface.load_latest_mapping_checkpoint()
-
 
     @app.post("/api/checkpoint/load")
     def load_checkpoint(req: CheckpointLoadRequest):
@@ -179,12 +187,31 @@ def create_app(ros_interface, package_share_dir: Path) -> FastAPI:
 
         return ros_interface.load_mapping_checkpoint(req.name.strip())
 
-
     @app.get("/api/checkpoint/list")
     def list_checkpoints():
         return {
             "ok": True,
             "checkpoints": ros_interface.get_checkpoint_list(),
         }
+
+    @app.post("/api/nav/waypoints")
+    def add_waypoint(req: WaypointRequest):
+        return ros_interface.add_waypoint(req.x, req.y, req.yaw)
+
+    @app.post("/api/nav/waypoints/clear")
+    def clear_waypoints():
+        return ros_interface.clear_waypoints()
+
+    @app.post("/api/nav/compute_path")
+    def compute_path():
+        return ros_interface.compute_waypoint_path()
+
+    @app.post("/api/nav/follow_path")
+    def follow_path():
+        return ros_interface.follow_waypoints()
+
+    @app.post("/api/nav/cancel")
+    def cancel_nav():
+        return ros_interface.cancel_navigation(set_manual_mode=True)
 
     return app
