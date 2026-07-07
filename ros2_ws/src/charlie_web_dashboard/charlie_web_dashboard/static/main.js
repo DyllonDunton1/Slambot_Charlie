@@ -18,7 +18,9 @@ const mapContainer = document.getElementById("map-container");
 const mapImage = document.getElementById("map-image");
 const mapOverlay = document.getElementById("map-overlay");
 const mapStatus = document.getElementById("map-status");
+const mapSaveStatus = document.getElementById("map-save-status");
 const downloadMapButton = document.getElementById("download-map");
+const saveNavMapButton = document.getElementById("save-nav-map");
 
 const tuningKpInput = document.getElementById("tuning-kp");
 const tuningKiInput = document.getElementById("tuning-ki");
@@ -71,6 +73,7 @@ linearSlider.addEventListener("input", updateSliderReadouts);
 angularSlider.addEventListener("input", updateSliderReadouts);
 
 downloadMapButton.addEventListener("click", downloadMapPng);
+saveNavMapButton.addEventListener("click", saveNavMap);
 applyTuningButton.addEventListener("click", applyTuning);
 resetIntegralButton.addEventListener("click", resetIntegral);
 saveCheckpointButton.addEventListener("click", saveCheckpoint);
@@ -215,6 +218,19 @@ function setMapStatus(text, mode = "normal") {
 
     if (mode === "error") {
         mapStatus.classList.add("error");
+    }
+}
+
+function setMapSaveStatus(text, mode = "normal") {
+    mapSaveStatus.textContent = text;
+    mapSaveStatus.classList.remove("active", "error");
+
+    if (mode === "active") {
+        mapSaveStatus.classList.add("active");
+    }
+
+    if (mode === "error") {
+        mapSaveStatus.classList.add("error");
     }
 }
 
@@ -760,6 +776,23 @@ async function cancelNavigation() {
     } catch (error) {
         console.error("Failed to cancel navigation", error);
         setNavStatus(`Nav: cancel failed | ${error.message}`, "error");
+    }
+}
+
+async function saveNavMap() {
+    try {
+        setMapSaveStatus("Nav Map: saving...");
+        const response = await fetch("/api/map/save_nav", { method: "POST" });
+        const data = await response.json();
+
+        if (!response.ok || !data.ok) {
+            throw new Error(data.message || `HTTP ${response.status}`);
+        }
+
+        setMapSaveStatus(`Nav Map: saved ${data.yaml_filename}`, "active");
+    } catch (error) {
+        console.error("Failed to save Nav2 map", error);
+        setMapSaveStatus(`Nav Map: save failed | ${error.message}`, "error");
     }
 }
 
