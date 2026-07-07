@@ -26,6 +26,10 @@
             <div class="map-controls">
                 <button id="download-map">Download Map PNG</button>
                 <button id="save-nav-map">Save Nav Map</button>
+                <label class="costmap-toggle">
+                    <input id="show-global-costmap" type="checkbox">
+                    Show Nav2 Global Costmap
+                </label>
             </div>
 
             <div id="map-status" class="map-status">
@@ -36,12 +40,17 @@
                 Nav Map: idle
             </div>
 
+            <div id="costmap-status" class="map-status">
+                Global Costmap: hidden
+            </div>
+
             <div id="pose-status" class="pose-status">
                 Pose: waiting
             </div>
 
             <div class="map-container" id="map-container">
                 <img id="map-image" src="/api/map/image" alt="Charlie map">
+                <img id="global-costmap-image" alt="Nav2 global costmap overlay">
                 <svg id="map-overlay"></svg>
                 <div id="robot-marker">
                     <div class="robot-arrow"></div>
@@ -177,10 +186,10 @@
 
             <pre id="status-readout">Loading...</pre>
         </section>
-
     </main>
 
     <script src="/static/main.js?v=10"></script>
     <script src="/static/initial_pose.js?v=1"></script>
+    <script src="/static/costmap_overlay.js?v=1"></script>
 </body>
 </html>
