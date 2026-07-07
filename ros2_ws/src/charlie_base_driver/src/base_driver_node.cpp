@@ -1,15 +1,16 @@
 #include "charlie_base_driver/base_driver_node.hpp"
 
+#include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <iomanip>
 #include <memory>
 #include <sstream>
 #include <string>
-#include <algorithm>
 
 #include "geometry_msgs/msg/transform_stamped.hpp"
-#include "tf2/LinearMath/Quaternion.h"
 #include "std_msgs/msg/string.hpp"
+#include "tf2/LinearMath/Quaternion.h"
 
 namespace charlie_base_driver {
 
@@ -34,12 +35,12 @@ BaseDriverNode::BaseDriverNode()
   previous_left_total_m_(0.0),
   previous_right_total_m_(0.0),
   last_status_(0),
+  last_battery_voltage_(0.0),
+  last_battery_percentage_(0.0),
   serial_connected_(false),
   last_kp_(0.0),
   last_ki_(0.0),
-  last_wheel_radius_m_(0.0),
-  last_battery_voltage_(0.0),
-  last_battery_percentage_(0.0)
+  last_wheel_radius_m_(0.0)
 {
     declare_parameters();
     load_parameters();
@@ -384,18 +385,16 @@ double BaseDriverNode::estimate_battery_percentage(double voltage) const
         double percentage;
     };
 
+    // Field-test calibration: the current pack reports practical full charge
+    // around 11.7 V under Charlie's load, so clamp 11.7 V and above to 100%.
     static constexpr BatteryPoint table[] = {
-        {12.60, 1.00},
-        {12.30, 0.90},
-        {12.10, 0.80},
-        {11.90, 0.70},
-        {11.70, 0.60},
-        {11.50, 0.50},
-        {11.30, 0.40},
-        {11.10, 0.30},
-        {10.80, 0.20},
-        {10.50, 0.10},
-        {10.20, 0.05},
+        {11.70, 1.00},
+        {11.50, 0.83},
+        {11.30, 0.67},
+        {11.10, 0.50},
+        {10.80, 0.33},
+        {10.50, 0.17},
+        {10.20, 0.08},
         { 9.90, 0.00},
     };
 
@@ -571,7 +570,6 @@ void BaseDriverNode::send_teensy_config_command(const std::string & command)
     RCLCPP_INFO(this->get_logger(), "Sent Teensy config: %s", command.c_str());
 }
 
-
 void BaseDriverNode::tuning_command_callback(const std_msgs::msg::String::SharedPtr msg)
 {
     const std::string text = msg->data;
@@ -702,6 +700,16 @@ void BaseDriverNode::tuning_command_callback(const std_msgs::msg::String::Shared
     }
 }
 
+void BaseDriverNode::update_tuning_debug_json(
+    std::ostringstream & json,
+    double kp,
+    double ki,
+    double wheel_radius_m)
+{
+    json << "\"kp\":" << kp << ",";
+    json << "\"ki\":" << ki << ",";
+    json << "\"wheel_radius_m\":" << wheel_radius_m;
+}
 
 rcl_interfaces::msg::SetParametersResult BaseDriverNode::parameters_callback(
     const std::vector<rclcpp::Parameter> & parameters)
