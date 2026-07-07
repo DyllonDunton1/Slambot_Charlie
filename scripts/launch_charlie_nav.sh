@@ -20,11 +20,10 @@ USE_UNICAST=false
 USE_EKF=false
 MAP_YAML="${HOME}/Slambot_Charlie/runtime/maps/test_map.yaml"
 BRINGUP_ARGS=()
-NAV_ARGS=()
 
 show_usage() {
   cat <<EOF
-Usage: $0 [-unicast] [-ekf] [-map /path/to/map.yaml] [-- bringup_or_nav_launch_args]
+Usage: $0 [-unicast] [-ekf] [-map /path/to/map.yaml] [additional bringup launch args]
 
 Options:
   -unicast        Use the Fast DDS unicast discovery profile.
@@ -134,7 +133,7 @@ BRINGUP_PID=$!
 # before Nav2 lifecycle nodes start checking transforms.
 sleep 4
 
-ros2 launch charlie_navigation navigation.launch.py map:="${MAP_YAML}" "${NAV_ARGS[@]}" &
+ros2 launch charlie_navigation navigation.launch.py map:="${MAP_YAML}" &
 NAV_PID=$!
 
 wait -n "${BRINGUP_PID}" "${NAV_PID}"
