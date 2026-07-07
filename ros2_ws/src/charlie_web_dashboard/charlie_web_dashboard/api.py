@@ -1,3 +1,4 @@
+from datetime import datetime
 from pathlib import Path
 import time
 
@@ -32,6 +33,109 @@ class WaypointRequest(BaseModel):
     x: float
     y: float
     yaw: float = 0.0
+
+
+def occupancy_grid_to_pgm_bytes(msg, occupied_thresh: float = 0.65, free_thresh: float = 0.25) -> bytes:
+    width = int(msg.info.width)
+    height = int(msg.info.height)
+
+    if width <= 0 or height <= 0:
+        raise ValueError("Map width or height is zero")
+
+    occupied_cutoff = int(occupied_thresh * 100.0)
+    free_cutoff = int(free_thresh * 100.0)
+    data = list(msg.data)
+
+    # ROS occupancy grids are stored from the map origin upward. PGM images are
+    # viewed from top-left, so write rows in reverse order like nav2 map_saver.
+    pixels = bytearray()
+    for y in reversed(range(height)):
+        row_start = y * width
+        for x in range(width):
+            occ = int(data[row_start + x])
+
+            if occ < 0:
+                pixel = 205  # unknown
+            elif occ >= occupied_cutoff:
+                pixel = 0    # occupied
+            elif occ <= free_cutoff:
+                pixel = 254  # free
+            else:
+                pixel = 205  # unknown / uncertain
+
+            pixels.append(pixel)
+
+    header = f"P5\n# CREATOR: Charlie web dashboard\n{width} {height}\n255\n".encode("ascii")
+    return header + bytes(pixels)
+
+
+def save_latest_nav_map(ros_interface):
+    with ros_interface.lock:
+        msg = ros_interface.latest_map_msg
+
+    if msg is None:
+        return {
+            "ok": False,
+            "message": "No /map has been received yet. Start mapping or Nav2 map_server first.",
+        }
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    map_name = f"nav_map_{timestamp}"
+    map_dir = Path.home() / "Slambot_Charlie" / "runtime" / "maps"
+    map_dir.mkdir(parents=True, exist_ok=True)
+
+    pgm_path = map_dir / f"{map_name}.pgm"
+    yaml_path = map_dir / f"{map_name}.yaml"
+
+    occupied_thresh = 0.65
+    free_thresh = 0.25
+
+    try:
+        pgm_path.write_bytes(
+            occupancy_grid_to_pgm_bytes(
+                msg,
+                occupied_thresh=occupied_thresh,
+                free_thresh=free_thresh,
+            )
+        )
+
+        origin = msg.info.origin
+        yaw = ros_interface.quaternion_to_yaw(
+            origin.orientation.x,
+            origin.orientation.y,
+            origin.orientation.z,
+            origin.orientation.w,
+        )
+
+        yaml_text = "\n".join([
+            f"image: {pgm_path.name}",
+            "mode: trinary",
+            f"resolution: {float(msg.info.resolution):.12g}",
+            f"origin: [{float(origin.position.x):.12g}, {float(origin.position.y):.12g}, {float(yaw):.12g}]",
+            "negate: 0",
+            f"occupied_thresh: {occupied_thresh}",
+            f"free_thresh: {free_thresh}",
+            "",
+        ])
+        yaml_path.write_text(yaml_text)
+
+    except Exception as exc:
+        return {
+            "ok": False,
+            "message": f"Failed to save Nav2 map: {exc}",
+            "directory": str(map_dir),
+        }
+
+    return {
+        "ok": True,
+        "message": "Saved Nav2 occupancy map.",
+        "map_name": map_name,
+        "directory": str(map_dir),
+        "yaml_path": str(yaml_path),
+        "image_path": str(pgm_path),
+        "yaml_filename": yaml_path.name,
+        "image_filename": pgm_path.name,
+    }
 
 
 def create_app(ros_interface, package_share_dir: Path) -> FastAPI:
@@ -161,6 +265,10 @@ def create_app(ros_interface, package_share_dir: Path) -> FastAPI:
                 "Content-Disposition": f'attachment; filename="{filename}"'
             },
         )
+
+    @app.post("/api/map/save_nav")
+    def save_nav_map():
+        return save_latest_nav_map(ros_interface)
 
     @app.post("/api/tuning")
     def set_tuning(req: TuningRequest):
