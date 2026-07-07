@@ -290,10 +290,12 @@ velocity_smoother:
     smoothing_frequency: 20.0
     scale_velocities: false
     feedback: "OPEN_LOOP"
-    max_velocity: [0.18, 0.0, 0.8]
-    min_velocity: [-0.06, 0.0, -0.8]
-    max_accel: [0.15, 0.0, 0.4]
-    max_decel: [-0.20, 0.0, -0.50]
+    # Differential-drive velocity order is [x, y, theta]. Charlie cannot strafe,
+    # so y velocity and acceleration limits stay at 0.0.
+    max_velocity: [0.08, 0.0, 0.35]
+    min_velocity: [-0.02, 0.0, -0.35]
+    max_accel: [0.12, 0.0, 0.5]
+    max_decel: [-0.12, 0.0, -0.5]
     odom_topic: "/odom"
     odom_duration: 0.1
     deadband_velocity: [0.0, 0.0, 0.0]
