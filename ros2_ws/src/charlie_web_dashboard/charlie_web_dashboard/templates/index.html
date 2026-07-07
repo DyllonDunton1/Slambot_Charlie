@@ -8,6 +8,10 @@
 
 <body>
     <header class="top-status-bar">
+        <div class="status-pill" id="mode-pill">
+            <span class="status-label">Mode</span>
+            <span id="control-mode-label">Manual</span>
+        </div>
         <div class="status-pill" id="battery-pill">
             <span class="status-label">Battery</span>
             <span id="battery-voltage">--.-- V</span>
@@ -31,8 +35,9 @@
                 Pose: waiting
             </div>
 
-            <div class="map-container">
+            <div class="map-container" id="map-container">
                 <img id="map-image" src="/api/map/image" alt="Charlie map">
+                <svg id="map-overlay"></svg>
                 <div id="robot-marker">
                     <div class="robot-arrow"></div>
                 </div>
@@ -53,27 +58,57 @@
         <section class="panel controls-panel">
             <h2>Controls</h2>
 
-            <div class="controls">
-                <button id="forward">Forward</button>
-                <div>
-                    <button id="left">Left</button>
-                    <button id="stop" class="stop">STOP</button>
-                    <button id="right">Right</button>
-                </div>
-                <button id="backward">Backward</button>
+            <div class="mode-toggle">
+                <button id="mode-manual" class="mode-button active">Manual</button>
+                <button id="mode-waypoint-nav" class="mode-button">Waypoint Nav</button>
             </div>
 
-            <label>
-                Linear speed
-                <input id="linear-speed" type="range" min="0.02" max="0.30" step="0.01" value="0.06">
-                <span id="linear-speed-readout">0.06</span> m/s
-            </label>
+            <div id="manual-control-section" class="control-section active-section">
+                <h3>Manual Drive</h3>
+                <div class="controls">
+                    <button id="forward">Forward</button>
+                    <div>
+                        <button id="left">Left</button>
+                        <button id="stop" class="stop">STOP</button>
+                        <button id="right">Right</button>
+                    </div>
+                    <button id="backward">Backward</button>
+                </div>
 
-            <label>
-                Angular speed
-                <input id="angular-speed" type="range" min="0.10" max="1.50" step="0.05" value="0.25">
-                <span id="angular-speed-readout">0.25</span> rad/s
-            </label>
+                <label>
+                    Linear speed
+                    <input id="linear-speed" type="range" min="0.02" max="0.30" step="0.01" value="0.06">
+                    <span id="linear-speed-readout">0.06</span> m/s
+                </label>
+
+                <label>
+                    Angular speed
+                    <input id="angular-speed" type="range" min="0.10" max="1.50" step="0.05" value="0.25">
+                    <span id="angular-speed-readout">0.25</span> rad/s
+                </label>
+            </div>
+
+            <div id="waypoint-control-section" class="control-section hidden-section">
+                <h3>Waypoint Navigation</h3>
+                <p class="hint">
+                    Click on the map to add waypoints. Compute the path first, then start navigation.
+                </p>
+
+                <div class="nav-buttons">
+                    <button id="compute-path">Compute Path</button>
+                    <button id="follow-path" class="primary-action">Follow Path</button>
+                    <button id="clear-waypoints">Clear Waypoints</button>
+                    <button id="cancel-nav" class="stop">Cancel Nav</button>
+                </div>
+
+                <div id="nav-status" class="nav-status">
+                    Nav: idle
+                </div>
+
+                <div id="waypoint-list" class="waypoint-list">
+                    No waypoints yet.
+                </div>
+            </div>
 
             <div class="tuning-panel">
                 <h3>Tuning</h3>
@@ -95,7 +130,7 @@
 
                 <label>
                     Wheel separation m
-                    <input id="tuning-wheel-separation" type="number" step="0.0001" value="0.2210">
+                    <input id="tuning-wheel-separation" type="number" step="0.0001" value="0.2066">
                 </label>
 
                 <div class="tuning-buttons">
@@ -136,9 +171,9 @@
 
             <pre id="status-readout">Loading...</pre>
         </section>
-    
+
     </main>
 
-    <script src="/static/main.js?v=8"></script>
+    <script src="/static/main.js?v=9"></script>
 </body>
 </html>
