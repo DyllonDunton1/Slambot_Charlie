@@ -5,6 +5,7 @@ import time
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse, StreamingResponse, Response
 from fastapi.staticfiles import StaticFiles
+from geometry_msgs.msg import PoseWithCovarianceStamped
 from pydantic import BaseModel
 
 
@@ -33,6 +34,14 @@ class WaypointRequest(BaseModel):
     x: float
     y: float
     yaw: float = 0.0
+
+
+class InitialPoseRequest(BaseModel):
+    x: float
+    y: float
+    yaw: float = 0.0
+    covariance_xy: float = 0.25
+    covariance_yaw: float = 0.0685
 
 
 def occupancy_grid_to_pgm_bytes(msg, occupied_thresh: float = 0.65, free_thresh: float = 0.25) -> bytes:
@@ -135,6 +144,51 @@ def save_latest_nav_map(ros_interface):
         "image_path": str(pgm_path),
         "yaml_filename": yaml_path.name,
         "image_filename": pgm_path.name,
+    }
+
+
+def publish_initial_pose(ros_interface, req: InitialPoseRequest):
+    if not hasattr(ros_interface, "initial_pose_pub"):
+        ros_interface.initial_pose_pub = ros_interface.create_publisher(
+            PoseWithCovarianceStamped,
+            "/initialpose",
+            10,
+        )
+
+    msg = PoseWithCovarianceStamped()
+    msg.header.frame_id = "map"
+    msg.header.stamp = ros_interface.get_clock().now().to_msg()
+    msg.pose.pose.position.x = float(req.x)
+    msg.pose.pose.position.y = float(req.y)
+    msg.pose.pose.position.z = 0.0
+
+    qx, qy, qz, qw = ros_interface.yaw_to_quaternion(float(req.yaw))
+    msg.pose.pose.orientation.x = qx
+    msg.pose.pose.orientation.y = qy
+    msg.pose.pose.orientation.z = qz
+    msg.pose.pose.orientation.w = qw
+
+    covariance = [0.0] * 36
+    covariance[0] = float(req.covariance_xy)
+    covariance[7] = float(req.covariance_xy)
+    covariance[35] = float(req.covariance_yaw)
+    msg.pose.covariance = covariance
+
+    # Publish a few times to give AMCL/RViz-style subscribers a solid chance to
+    # receive the one-shot initial pose even if discovery has just completed.
+    for _ in range(3):
+        ros_interface.initial_pose_pub.publish(msg)
+        time.sleep(0.05)
+
+    return {
+        "ok": True,
+        "message": "Published AMCL initial pose.",
+        "topic": "/initialpose",
+        "pose": {
+            "x": msg.pose.pose.position.x,
+            "y": msg.pose.pose.position.y,
+            "yaw": float(req.yaw),
+        },
     }
 
 
@@ -301,6 +355,10 @@ def create_app(ros_interface, package_share_dir: Path) -> FastAPI:
             "ok": True,
             "checkpoints": ros_interface.get_checkpoint_list(),
         }
+
+    @app.post("/api/nav/initial_pose")
+    def set_initial_pose(req: InitialPoseRequest):
+        return publish_initial_pose(ros_interface, req)
 
     @app.post("/api/nav/waypoints")
     def add_waypoint(req: WaypointRequest):
