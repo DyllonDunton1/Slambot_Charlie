@@ -18,6 +18,10 @@
             <span class="status-separator">|</span>
             <span id="battery-percent">--%</span>
         </div>
+        <div class="status-pill" id="session-time-pill">
+            <span class="status-label">Session</span>
+            <span id="session-time">00:00:00</span>
+        </div>
     </header>
     <main class="dashboard">
         <section class="panel map-panel">
@@ -190,6 +194,30 @@
     </main>
 
     <script src="/static/main.js?v=10"></script>
+    <script>
+        (() => {
+            const sessionTimeElement = document.getElementById("session-time");
+            const sessionStartedAt = Date.now();
+
+            if (!sessionTimeElement) {
+                return;
+            }
+
+            function updateSessionTime() {
+                const elapsedSeconds = Math.floor((Date.now() - sessionStartedAt) / 1000);
+                const hours = Math.floor(elapsedSeconds / 3600);
+                const minutes = Math.floor((elapsedSeconds % 3600) / 60);
+                const seconds = elapsedSeconds % 60;
+
+                sessionTimeElement.textContent = [hours, minutes, seconds]
+                    .map((value) => String(value).padStart(2, "0"))
+                    .join(":");
+            }
+
+            updateSessionTime();
+            window.setInterval(updateSessionTime, 1000);
+        })();
+    </script>
     <script>
         (() => {
             const mapImageElement = document.getElementById("map-image");
