@@ -87,6 +87,7 @@
                         <button id="right">Right</button>
                     </div>
                     <button id="backward">Backward</button>
+                    <button id="lock-command" title="Hold a movement command, then click here or press L">Lock Current Command (L)</button>
                 </div>
 
                 <label>
@@ -248,6 +249,115 @@
             }
 
             console.log("Charlie dashboard map render stability patch loaded");
+        })();
+    </script>
+    <script>
+        (() => {
+            const lockButton = document.getElementById("lock-command");
+            const stopButton = document.getElementById("stop");
+            const waypointModeButton = document.getElementById("mode-waypoint-nav");
+
+            if (!lockButton || typeof computeCommand !== "function") {
+                console.warn("Manual command latch could not initialize.");
+                return;
+            }
+
+            const unlockedComputeCommand = computeCommand;
+            let latchedCommand = null;
+
+            function updateLockButton() {
+                const locked = latchedCommand !== null;
+                lockButton.classList.toggle("active", locked);
+                lockButton.textContent = locked
+                    ? "Command Locked — STOP to Reset"
+                    : "Lock Current Command (L)";
+            }
+
+            function clearCommandLatch() {
+                latchedCommand = null;
+                updateLockButton();
+            }
+
+            function latchCurrentCommand() {
+                if (controlMode !== "manual") {
+                    clearCommandLatch();
+                    return;
+                }
+
+                if (latchedCommand !== null) {
+                    clearCommandLatch();
+                    return;
+                }
+
+                const command = unlockedComputeCommand();
+                const linear = Number(command.linear_x) || 0.0;
+                const angular = Number(command.angular_z) || 0.0;
+
+                if (Math.abs(linear) < 1.0e-6 && Math.abs(angular) < 1.0e-6) {
+                    lockButton.textContent = "Hold a Direction, Then Lock (L)";
+                    window.setTimeout(updateLockButton, 1200);
+                    return;
+                }
+
+                latchedCommand = {
+                    linear_x: linear,
+                    angular_z: angular,
+                };
+                updateLockButton();
+            }
+
+            computeCommand = function computeCommandWithLatch() {
+                if (latchedCommand !== null) {
+                    return {
+                        linear_x: latchedCommand.linear_x,
+                        angular_z: latchedCommand.angular_z,
+                    };
+                }
+
+                return unlockedComputeCommand();
+            };
+
+            lockButton.addEventListener("click", latchCurrentCommand);
+
+            if (stopButton) {
+                stopButton.addEventListener("click", clearCommandLatch, true);
+            }
+
+            if (waypointModeButton) {
+                waypointModeButton.addEventListener("click", clearCommandLatch, true);
+            }
+
+            document.addEventListener("keydown", (event) => {
+                if (event.code === "Space") {
+                    clearCommandLatch();
+                    return;
+                }
+
+                if (event.key.toLowerCase() !== "l" || event.repeat) {
+                    return;
+                }
+
+                const target = event.target;
+                const isTyping = target instanceof HTMLInputElement
+                    || target instanceof HTMLTextAreaElement
+                    || target instanceof HTMLSelectElement;
+
+                if (isTyping) {
+                    return;
+                }
+
+                event.preventDefault();
+                latchCurrentCommand();
+            }, true);
+
+            window.setInterval(() => {
+                if (controlMode !== "manual" && latchedCommand !== null) {
+                    clearCommandLatch();
+                }
+            }, 250);
+
+            updateLockButton();
+            console.log("Charlie dashboard manual command latch loaded");
         })();
     </script>
     <script src="/static/initial_pose.js?v=1"></script>
