@@ -5,34 +5,77 @@ set -uo pipefail
 # observed averages against expected ranges.
 #
 # Usage:
-#   bash scripts/check_ros2_topic_rates.sh
-#   bash scripts/check_ros2_topic_rates.sh 20
+#   ./scripts/check_ros2_topic_rates.sh
+#   ./scripts/check_ros2_topic_rates.sh 20
+#   ./scripts/check_ros2_topic_rates.sh -unicast
+#   ./scripts/check_ros2_topic_rates.sh -unicast 20
 #
-# The optional argument is the sampling duration in seconds per topic.
+# The optional integer is the sampling duration in seconds per topic.
 
 REPO_ROOT="${HOME}/Slambot_Charlie"
 ROS_DISTRO="${ROS_DISTRO:-humble}"
-SAMPLE_SECONDS="${1:-12}"
+SAMPLE_SECONDS=12
+USE_UNICAST=false
+DDS_PROFILE="${REPO_ROOT}/config/dds/fastdds_unicast_discovery.xml"
+
+show_usage() {
+    cat <<EOF
+Usage: $0 [-unicast] [sample_seconds]
+
+Options:
+  -unicast      Use Charlie's Fast DDS localhost unicast discovery profile.
+                Use this when Charlie was launched with -unicast.
+  -h, --help    Show this help message.
+
+Examples:
+  $0
+  $0 30
+  $0 -unicast
+  $0 -unicast 30
+EOF
+}
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -unicast)
+            USE_UNICAST=true
+            ;;
+        -h|--help)
+            show_usage
+            exit 0
+            ;;
+        *)
+            if [[ "$1" =~ ^[0-9]+$ ]]; then
+                SAMPLE_SECONDS="$1"
+            else
+                echo "Unknown argument: $1" >&2
+                show_usage >&2
+                exit 2
+            fi
+            ;;
+    esac
+    shift
+done
+
 STAMP="$(date +%Y%m%d_%H%M%S)"
 OUTPUT_ROOT="${REPO_ROOT}/runtime/diagnostics/topic_rates_${STAMP}"
 SUMMARY_TXT="${OUTPUT_ROOT}/summary.txt"
 SUMMARY_CSV="${OUTPUT_ROOT}/summary.csv"
 RAW_DIR="${OUTPUT_ROOT}/raw"
+VISIBLE_TOPICS_FILE="${OUTPUT_ROOT}/visible_topics.txt"
+ENV_FILE="${OUTPUT_ROOT}/ros_environment.txt"
 
 if ! [[ "${SAMPLE_SECONDS}" =~ ^[0-9]+$ ]] || (( SAMPLE_SECONDS < 3 )); then
     echo "Sampling duration must be an integer of at least 3 seconds." >&2
     exit 2
 fi
 
-# ROS environment setup scripts are not guaranteed to be safe under `set -u`.
-# Temporarily disable nounset while sourcing them, then restore it immediately.
+# ROS/ament setup scripts reference optional variables that may be unset.
 set +u
-
 if [[ -f "/opt/ros/${ROS_DISTRO}/setup.bash" ]]; then
     # shellcheck disable=SC1090
     source "/opt/ros/${ROS_DISTRO}/setup.bash"
 else
-    set -u
     echo "ROS setup not found: /opt/ros/${ROS_DISTRO}/setup.bash" >&2
     exit 1
 fi
@@ -41,22 +84,56 @@ if [[ -f "${REPO_ROOT}/ros2_ws/install/setup.bash" ]]; then
     # shellcheck disable=SC1091
     source "${REPO_ROOT}/ros2_ws/install/setup.bash"
 else
-    set -u
     echo "Workspace setup not found: ${REPO_ROOT}/ros2_ws/install/setup.bash" >&2
     echo "Build and source the workspace before running this script." >&2
     exit 1
 fi
-
 set -u
+
+if [[ "${USE_UNICAST}" == "true" ]]; then
+    if [[ ! -f "${DDS_PROFILE}" ]]; then
+        echo "Fast DDS profile not found: ${DDS_PROFILE}" >&2
+        exit 1
+    fi
+    export RMW_IMPLEMENTATION=rmw_fastrtps_cpp
+    export FASTDDS_DEFAULT_PROFILES_FILE="${DDS_PROFILE}"
+fi
 
 mkdir -p "${RAW_DIR}"
 
+{
+    printf 'ROS_DISTRO=%s\n' "${ROS_DISTRO}"
+    printf 'ROS_DOMAIN_ID=%s\n' "${ROS_DOMAIN_ID:-0 (default)}"
+    printf 'RMW_IMPLEMENTATION=%s\n' "${RMW_IMPLEMENTATION:-default}"
+    printf 'FASTDDS_DEFAULT_PROFILES_FILE=%s\n' "${FASTDDS_DEFAULT_PROFILES_FILE:-unset}"
+    printf 'USE_UNICAST=%s\n' "${USE_UNICAST}"
+} > "${ENV_FILE}"
+
+# Avoid stale ros2daemon discovery state before checking the graph.
+ros2 daemon stop >/dev/null 2>&1 || true
+sleep 1
+
+if ! timeout 8 ros2 topic list > "${VISIBLE_TOPICS_FILE}" 2>&1; then
+    echo "Unable to query the ROS 2 topic graph." >&2
+    cat "${VISIBLE_TOPICS_FILE}" >&2
+    exit 1
+fi
+
+visible_topic_count="$(grep -c '^/' "${VISIBLE_TOPICS_FILE}" || true)"
+if (( visible_topic_count == 0 )); then
+    echo "No ROS 2 topics are visible from this shell." >&2
+    echo >&2
+    cat "${ENV_FILE}" >&2
+    echo >&2
+    echo "If Charlie was launched with -unicast, run:" >&2
+    echo "  $0 -unicast ${SAMPLE_SECONDS}" >&2
+    echo >&2
+    echo "Visible-topic output saved to: ${VISIBLE_TOPICS_FILE}" >&2
+    exit 1
+fi
+
 # Format:
 #   topic|min_hz|max_hz|required|description
-#
-# Required topics should normally exist in Charlie's standard bringup.
-# Optional topics depend on mapping, EKF, or Nav2 mode. An inactive optional
-# topic is reported as INACTIVE rather than FAIL.
 TOPIC_SPECS=(
     "/scan|4.0|6.5|required|LiDAR scan; expected around 5 Hz"
     "/odom|8.0|60.0|required|Base or active odometry stream"
@@ -100,6 +177,8 @@ compare_rate() {
 printf 'Charlie ROS 2 Topic Frequency Report\n' > "${SUMMARY_TXT}"
 printf 'Generated: %s\n' "$(date --iso-8601=seconds)" >> "${SUMMARY_TXT}"
 printf 'Sample duration: %s seconds per topic\n' "${SAMPLE_SECONDS}" >> "${SUMMARY_TXT}"
+printf 'Visible ROS topics: %s\n' "${visible_topic_count}" >> "${SUMMARY_TXT}"
+printf 'Unicast profile: %s\n' "${USE_UNICAST}" >> "${SUMMARY_TXT}"
 printf 'Output directory: %s\n\n' "${OUTPUT_ROOT}" >> "${SUMMARY_TXT}"
 printf '%-34s %-10s %-17s %-10s %s\n' "TOPIC" "OBSERVED" "EXPECTED" "STATUS" "NOTES" >> "${SUMMARY_TXT}"
 printf '%-34s %-10s %-17s %-10s %s\n' "----------------------------------" "----------" "-----------------" "----------" "------------------------------" >> "${SUMMARY_TXT}"
@@ -119,9 +198,17 @@ for spec in "${TOPIC_SPECS[@]}"; do
         "${topic}" "${min_hz}" "${max_hz}" "${required}" "${description}" "${raw_file}" \
         > "${metadata_file}"
 
+    if ! grep -Fxq "${topic}" "${VISIBLE_TOPICS_FILE}"; then
+        printf 'Topic is not present in ros2 topic list.\n' > "${raw_file}"
+        metadata_files+=("${metadata_file}")
+        continue
+    fi
+
     echo "Sampling ${topic} for ${SAMPLE_SECONDS}s..."
     (
-        timeout --signal=INT "${SAMPLE_SECONDS}" \
+        # ros2 topic hz is Python-based. Force unbuffered output so its periodic
+        # averages reach the file before timeout sends SIGINT.
+        PYTHONUNBUFFERED=1 timeout --signal=INT --kill-after=3 "${SAMPLE_SECONDS}" \
             ros2 topic hz --window 100 "${topic}" > "${raw_file}" 2>&1
         exit 0
     ) &
@@ -199,7 +286,9 @@ done
     printf '  FAIL       required topic produced no measurable messages\n'
     printf '  WARN-*     optional topic is active but outside its expected range\n'
     printf '  INACTIVE   optional topic was not publishing in the current mode\n'
-    printf '\nRaw ros2 topic hz output is stored under:\n  %s\n' "${RAW_DIR}"
+    printf '\nVisible topic list:\n  %s\n' "${VISIBLE_TOPICS_FILE}"
+    printf 'ROS environment snapshot:\n  %s\n' "${ENV_FILE}"
+    printf 'Raw ros2 topic hz output:\n  %s\n' "${RAW_DIR}"
 } >> "${SUMMARY_TXT}"
 
 cat "${SUMMARY_TXT}"
