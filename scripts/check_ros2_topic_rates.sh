@@ -1,15 +1,6 @@
 #!/usr/bin/env bash
 set -uo pipefail
 
-# Measure important Charlie ROS 2 topic rates, save raw output, and compare the
-# observed averages against expected ranges.
-#
-# Usage:
-#   ./scripts/check_ros2_topic_rates.sh
-#   ./scripts/check_ros2_topic_rates.sh 30
-#   ./scripts/check_ros2_topic_rates.sh -unicast
-#   ./scripts/check_ros2_topic_rates.sh -unicast 30
-
 REPO_ROOT="${HOME}/Slambot_Charlie"
 ROS_DISTRO="${ROS_DISTRO:-humble}"
 SAMPLE_SECONDS=12
@@ -22,7 +13,6 @@ Usage: $0 [-unicast] [sample_seconds]
 
 Options:
   -unicast      Use Charlie's Fast DDS localhost unicast discovery profile.
-                 Use this when Charlie was launched with -unicast.
   -h, --help    Show this help message.
 EOF
 }
@@ -54,23 +44,9 @@ if ! [[ "${SAMPLE_SECONDS}" =~ ^[0-9]+$ ]] || (( SAMPLE_SECONDS < 3 )); then
     exit 2
 fi
 
-# ROS/ament setup scripts may reference optional variables that are unset.
 set +u
-if [[ -f "/opt/ros/${ROS_DISTRO}/setup.bash" ]]; then
-    # shellcheck disable=SC1090
-    source "/opt/ros/${ROS_DISTRO}/setup.bash"
-else
-    echo "ROS setup not found: /opt/ros/${ROS_DISTRO}/setup.bash" >&2
-    exit 1
-fi
-
-if [[ -f "${REPO_ROOT}/ros2_ws/install/setup.bash" ]]; then
-    # shellcheck disable=SC1091
-    source "${REPO_ROOT}/ros2_ws/install/setup.bash"
-else
-    echo "Workspace setup not found: ${REPO_ROOT}/ros2_ws/install/setup.bash" >&2
-    exit 1
-fi
+source "/opt/ros/${ROS_DISTRO}/setup.bash"
+source "${REPO_ROOT}/ros2_ws/install/setup.bash"
 set -u
 
 if [[ "${USE_UNICAST}" == "true" ]]; then
@@ -84,191 +60,187 @@ fi
 
 STAMP="$(date +%Y%m%d_%H%M%S)"
 OUTPUT_ROOT="${REPO_ROOT}/runtime/diagnostics/topic_rates_${STAMP}"
-SUMMARY_TXT="${OUTPUT_ROOT}/summary.txt"
-SUMMARY_CSV="${OUTPUT_ROOT}/summary.csv"
-RAW_DIR="${OUTPUT_ROOT}/raw"
-VISIBLE_TOPICS_FILE="${OUTPUT_ROOT}/visible_topics.txt"
-ENV_FILE="${OUTPUT_ROOT}/ros_environment.txt"
-mkdir -p "${RAW_DIR}"
+mkdir -p "${OUTPUT_ROOT}"
 
-{
-    printf 'ROS_DISTRO=%s\n' "${ROS_DISTRO}"
-    printf 'ROS_DOMAIN_ID=%s\n' "${ROS_DOMAIN_ID:-0 (default)}"
-    printf 'RMW_IMPLEMENTATION=%s\n' "${RMW_IMPLEMENTATION:-default}"
-    printf 'FASTDDS_DEFAULT_PROFILES_FILE=%s\n' "${FASTDDS_DEFAULT_PROFILES_FILE:-unset}"
-    printf 'USE_UNICAST=%s\n' "${USE_UNICAST}"
-} > "${ENV_FILE}"
+export CHARLIE_RATE_SAMPLE_SECONDS="${SAMPLE_SECONDS}"
+export CHARLIE_RATE_OUTPUT_ROOT="${OUTPUT_ROOT}"
+export CHARLIE_RATE_USE_UNICAST="${USE_UNICAST}"
 
-# Do not stop the shared ros2 daemon here. Doing so can invalidate concurrent
-# CLI contexts. Also, a topic-list command may return nonzero even after it has
-# printed a valid list, so the captured content is the source of truth.
-topic_list_status=0
-ros2 topic list > "${VISIBLE_TOPICS_FILE}" 2>&1 || topic_list_status=$?
-visible_topic_count="$(grep -c '^/' "${VISIBLE_TOPICS_FILE}" 2>/dev/null || true)"
+python3 - <<'PY'
+import csv
+import os
+import sys
+import time
+from pathlib import Path
 
-if (( visible_topic_count == 0 )); then
-    echo "No ROS 2 topics are visible from this shell." >&2
-    echo "ros2 topic list exit status: ${topic_list_status}" >&2
-    cat "${VISIBLE_TOPICS_FILE}" >&2
-    echo >&2
-    cat "${ENV_FILE}" >&2
-    echo >&2
-    echo "If Charlie was launched with -unicast, run:" >&2
-    echo "  $0 -unicast ${SAMPLE_SECONDS}" >&2
-    exit 1
-fi
+import rclpy
+from rclpy.node import Node
+from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy, HistoryPolicy
+from rosidl_runtime_py.utilities import get_message
 
-# topic|min_hz|max_hz|required|description
-TOPIC_SPECS=(
-    "/scan|4.0|6.5|required|LiDAR scan; expected around 5 Hz"
-    "/odom|8.0|60.0|required|Base or active odometry stream"
-    "/imu/data|15.0|200.0|required|ICM-20948 gyro data"
-    "/base_debug|5.0|60.0|required|Base-driver debug telemetry"
-    "/battery/state|0.5|20.0|optional|Battery telemetry"
-    "/map|0.3|3.0|optional|SLAM map updates; mapping mode only"
-    "/wheel/odom|8.0|60.0|optional|Wheel odometry; active EKF mode only"
-    "/odometry/filtered|15.0|50.0|optional|robot_localization EKF output"
-    "/cmd_vel|5.0|30.0|optional|Final velocity command; measure while moving"
-    "/cmd_vel_nav|5.0|20.0|optional|Nav2 controller output; active navigation only"
-    "/plan|0.1|10.0|optional|Nav2 global plan; only updates when planning/replanning"
-    "/global_costmap/costmap|0.5|2.0|optional|Nav2 global costmap publication"
-    "/local_costmap/costmap|1.0|6.5|optional|Nav2 local costmap publication"
+SPECS = [
+    ("/scan", 4.0, 6.5, True, "LiDAR scan; expected around 5 Hz"),
+    ("/odom", 8.0, 60.0, True, "Base or active odometry stream"),
+    ("/imu/data", 15.0, 200.0, True, "ICM-20948 gyro data"),
+    ("/base_debug", 5.0, 60.0, True, "Base-driver debug telemetry"),
+    ("/battery/state", 0.5, 20.0, False, "Battery telemetry"),
+    ("/map", 0.3, 3.0, False, "SLAM map updates; mapping mode only"),
+    ("/wheel/odom", 8.0, 60.0, False, "Wheel odometry; active EKF mode only"),
+    ("/odometry/filtered", 15.0, 50.0, False, "robot_localization EKF output"),
+    ("/cmd_vel", 5.0, 30.0, False, "Final velocity command; measure while moving"),
+    ("/cmd_vel_nav", 5.0, 20.0, False, "Nav2 controller output; active navigation only"),
+    ("/plan", 0.1, 10.0, False, "Nav2 global plan; only updates when planning/replanning"),
+    ("/global_costmap/costmap", 0.5, 2.0, False, "Nav2 global costmap publication"),
+    ("/local_costmap/costmap", 1.0, 6.5, False, "Nav2 local costmap publication"),
+]
+
+sample_seconds = float(os.environ["CHARLIE_RATE_SAMPLE_SECONDS"])
+out_dir = Path(os.environ["CHARLIE_RATE_OUTPUT_ROOT"])
+summary_txt = out_dir / "summary.txt"
+summary_csv = out_dir / "summary.csv"
+visible_topics_file = out_dir / "visible_topics.txt"
+env_file = out_dir / "ros_environment.txt"
+raw_counts_file = out_dir / "message_counts.csv"
+
+rclpy.init()
+node = Node("charlie_topic_rate_checker")
+
+# Give discovery a moment to populate.
+discovery_deadline = time.monotonic() + 3.0
+while time.monotonic() < discovery_deadline:
+    rclpy.spin_once(node, timeout_sec=0.1)
+
+topic_types = {name: types for name, types in node.get_topic_names_and_types()}
+visible_topics_file.write_text("\n".join(sorted(topic_types)) + "\n")
+
+env_file.write_text(
+    f"ROS_DISTRO={os.environ.get('ROS_DISTRO', 'unknown')}\n"
+    f"ROS_DOMAIN_ID={os.environ.get('ROS_DOMAIN_ID', '0 (default)')}\n"
+    f"RMW_IMPLEMENTATION={os.environ.get('RMW_IMPLEMENTATION', 'default')}\n"
+    f"FASTDDS_DEFAULT_PROFILES_FILE={os.environ.get('FASTDDS_DEFAULT_PROFILES_FILE', 'unset')}\n"
+    f"USE_UNICAST={os.environ.get('CHARLIE_RATE_USE_UNICAST', 'false')}\n"
 )
 
-sanitize_topic() {
-    local topic="$1"
-    topic="${topic#/}"
-    topic="${topic//\//__}"
-    printf '%s' "${topic}"
-}
+counts = {topic: 0 for topic, *_ in SPECS}
+first_time = {topic: None for topic, *_ in SPECS}
+last_time = {topic: None for topic, *_ in SPECS}
+subscriptions = []
+subscription_errors = {}
 
-extract_average_rate() {
-    local file="$1"
-    awk '/average rate:/ {rate=$3} END {if (rate != "") print rate}' "${file}" 2>/dev/null
-}
+qos = QoSProfile(
+    history=HistoryPolicy.KEEP_LAST,
+    depth=50,
+    reliability=ReliabilityPolicy.BEST_EFFORT,
+    durability=DurabilityPolicy.VOLATILE,
+)
 
-compare_rate() {
-    local rate="$1"
-    local min_hz="$2"
-    local max_hz="$3"
-    awk -v r="${rate}" -v lo="${min_hz}" -v hi="${max_hz}" 'BEGIN {
-        if (r < lo) print "LOW";
-        else if (r > hi) print "HIGH";
-        else print "PASS";
-    }'
-}
-
-printf 'Charlie ROS 2 Topic Frequency Report\n' > "${SUMMARY_TXT}"
-printf 'Generated: %s\n' "$(date --iso-8601=seconds)" >> "${SUMMARY_TXT}"
-printf 'Sample duration: %s seconds per topic\n' "${SAMPLE_SECONDS}" >> "${SUMMARY_TXT}"
-printf 'Visible ROS topics: %s\n' "${visible_topic_count}" >> "${SUMMARY_TXT}"
-printf 'Unicast profile: %s\n' "${USE_UNICAST}" >> "${SUMMARY_TXT}"
-printf 'Output directory: %s\n\n' "${OUTPUT_ROOT}" >> "${SUMMARY_TXT}"
-printf '%-34s %-10s %-17s %-12s %s\n' "TOPIC" "OBSERVED" "EXPECTED" "STATUS" "NOTES" >> "${SUMMARY_TXT}"
-printf '%-34s %-10s %-17s %-12s %s\n' "----------------------------------" "----------" "-----------------" "------------" "------------------------------" >> "${SUMMARY_TXT}"
-printf 'topic,observed_hz,min_hz,max_hz,required,status,description,raw_file\n' > "${SUMMARY_CSV}"
-
-pids=()
-metadata_files=()
-
-for spec in "${TOPIC_SPECS[@]}"; do
-    IFS='|' read -r topic min_hz max_hz required description <<< "${spec}"
-    safe_name="$(sanitize_topic "${topic}")"
-    raw_file="${RAW_DIR}/${safe_name}.txt"
-    metadata_file="${RAW_DIR}/${safe_name}.meta"
-
-    printf '%s|%s|%s|%s|%s|%s\n' \
-        "${topic}" "${min_hz}" "${max_hz}" "${required}" "${description}" "${raw_file}" \
-        > "${metadata_file}"
-    metadata_files+=("${metadata_file}")
-
-    if ! grep -Fxq "${topic}" "${VISIBLE_TOPICS_FILE}"; then
-        printf 'Topic is not present in ros2 topic list.\n' > "${raw_file}"
+for topic, *_ in SPECS:
+    types = topic_types.get(topic, [])
+    if not types:
         continue
-    fi
+    try:
+        msg_type = get_message(types[0])
+    except Exception as exc:
+        subscription_errors[topic] = f"type import failed: {exc}"
+        continue
 
-    echo "Sampling ${topic} for ${SAMPLE_SECONDS}s..."
-    (
-        PYTHONUNBUFFERED=1 stdbuf -oL -eL \
-            timeout --signal=INT --kill-after=3 "${SAMPLE_SECONDS}" \
-            ros2 topic hz --window 100 "${topic}" > "${raw_file}" 2>&1 || true
-    ) &
-    pids+=("$!")
-done
+    def make_callback(topic_name):
+        def callback(_msg):
+            now = time.monotonic()
+            counts[topic_name] += 1
+            if first_time[topic_name] is None:
+                first_time[topic_name] = now
+            last_time[topic_name] = now
+        return callback
 
-for pid in "${pids[@]}"; do
-    wait "${pid}" || true
-done
+    try:
+        subscriptions.append(node.create_subscription(msg_type, topic, make_callback(topic), qos))
+    except Exception as exc:
+        subscription_errors[topic] = f"subscription failed: {exc}"
 
-overall_exit=0
-pass_count=0
-warning_count=0
-fail_count=0
-inactive_count=0
+print(f"Sampling {len(subscriptions)} visible topics for {sample_seconds:.0f}s...")
+start = time.monotonic()
+while time.monotonic() - start < sample_seconds:
+    rclpy.spin_once(node, timeout_sec=0.1)
 
-for metadata_file in "${metadata_files[@]}"; do
-    IFS='|' read -r topic min_hz max_hz required description raw_file < "${metadata_file}"
-    rate="$(extract_average_rate "${raw_file}")"
+rows = []
+fail_count = warning_count = pass_count = inactive_count = 0
+overall_exit = 0
 
-    if [[ -z "${rate}" ]]; then
-        if [[ "${required}" == "required" ]]; then
-            status="FAIL"
-            observed="--"
-            ((fail_count += 1))
-            overall_exit=1
-        else
-            status="INACTIVE"
-            observed="--"
-            ((inactive_count += 1))
-        fi
-    else
-        comparison="$(compare_rate "${rate}" "${min_hz}" "${max_hz}")"
-        observed="$(printf '%.2f' "${rate}")"
-        case "${comparison}" in
-            PASS)
-                status="PASS"
-                ((pass_count += 1))
-                ;;
-            LOW|HIGH)
-                if [[ "${required}" == "required" ]]; then
-                    status="FAIL-${comparison}"
-                    ((fail_count += 1))
-                    overall_exit=1
-                else
-                    status="WARN-${comparison}"
-                    ((warning_count += 1))
-                fi
-                ;;
-        esac
-    fi
+for topic, min_hz, max_hz, required, description in SPECS:
+    count = counts[topic]
+    if count >= 2 and first_time[topic] is not None and last_time[topic] is not None:
+        elapsed = last_time[topic] - first_time[topic]
+        rate = (count - 1) / elapsed if elapsed > 0 else 0.0
+        observed = f"{rate:.2f}"
+        if min_hz <= rate <= max_hz:
+            status = "PASS"
+            pass_count += 1
+        elif required:
+            status = "FAIL-LOW" if rate < min_hz else "FAIL-HIGH"
+            fail_count += 1
+            overall_exit = 1
+        else:
+            status = "WARN-LOW" if rate < min_hz else "WARN-HIGH"
+            warning_count += 1
+    else:
+        observed = "--"
+        if required:
+            status = "FAIL"
+            fail_count += 1
+            overall_exit = 1
+        else:
+            status = "INACTIVE"
+            inactive_count += 1
 
-    expected="${min_hz}-${max_hz} Hz"
-    printf '%-34s %-10s %-17s %-12s %s\n' \
-        "${topic}" "${observed}" "${expected}" "${status}" "${description}" \
-        >> "${SUMMARY_TXT}"
+    note = description
+    if topic in subscription_errors:
+        note += f" | {subscription_errors[topic]}"
+    elif topic not in topic_types:
+        note += " | topic not present"
+    elif count == 1:
+        note += " | only one message received"
 
-    csv_description="${description//\"/\"\"}"
-    printf '"%s","%s","%s","%s","%s","%s","%s","%s"\n' \
-        "${topic}" "${observed}" "${min_hz}" "${max_hz}" "${required}" \
-        "${status}" "${csv_description}" "${raw_file}" \
-        >> "${SUMMARY_CSV}"
-done
+    rows.append((topic, observed, min_hz, max_hz, "required" if required else "optional", status, note, count))
 
-{
-    printf '\nTotals: %d pass, %d warning, %d fail, %d inactive optional\n' \
-        "${pass_count}" "${warning_count}" "${fail_count}" "${inactive_count}"
-    printf '\nInterpretation:\n'
-    printf '  PASS       observed rate is inside the expected range\n'
-    printf '  FAIL-LOW   required topic is publishing too slowly\n'
-    printf '  FAIL-HIGH  required topic is publishing unexpectedly fast\n'
-    printf '  FAIL       required topic produced no measurable messages\n'
-    printf '  WARN-*     optional topic is active but outside its expected range\n'
-    printf '  INACTIVE   optional topic was not publishing in the current mode\n'
-    printf '\nVisible topic list:\n  %s\n' "${VISIBLE_TOPICS_FILE}"
-    printf 'ROS environment snapshot:\n  %s\n' "${ENV_FILE}"
-    printf 'Raw ros2 topic hz output:\n  %s\n' "${RAW_DIR}"
-} >> "${SUMMARY_TXT}"
+with raw_counts_file.open("w", newline="") as handle:
+    writer = csv.writer(handle)
+    writer.writerow(["topic", "message_count", "first_time", "last_time"])
+    for topic, *_ in SPECS:
+        writer.writerow([topic, counts[topic], first_time[topic], last_time[topic]])
 
-cat "${SUMMARY_TXT}"
-printf '\nCSV summary: %s\n' "${SUMMARY_CSV}"
-exit "${overall_exit}"
+with summary_csv.open("w", newline="") as handle:
+    writer = csv.writer(handle)
+    writer.writerow(["topic", "observed_hz", "min_hz", "max_hz", "required", "status", "description", "message_count"])
+    writer.writerows(rows)
+
+lines = [
+    "Charlie ROS 2 Topic Frequency Report",
+    f"Generated: {time.strftime('%Y-%m-%dT%H:%M:%S%z')}",
+    f"Sample duration: {sample_seconds:.0f} seconds",
+    f"Visible ROS topics: {len(topic_types)}",
+    f"Unicast profile: {os.environ.get('CHARLIE_RATE_USE_UNICAST', 'false')}",
+    f"Output directory: {out_dir}",
+    "",
+    f"{'TOPIC':34} {'OBSERVED':10} {'EXPECTED':17} {'STATUS':12} NOTES",
+    f"{'-'*34} {'-'*10} {'-'*17} {'-'*12} {'-'*30}",
+]
+for topic, observed, min_hz, max_hz, _required, status, note, _count in rows:
+    lines.append(f"{topic:34} {observed:10} {f'{min_hz}-{max_hz} Hz':17} {status:12} {note}")
+
+lines.extend([
+    "",
+    f"Totals: {pass_count} pass, {warning_count} warning, {fail_count} fail, {inactive_count} inactive optional",
+    "",
+    f"Visible topic list: {visible_topics_file}",
+    f"ROS environment snapshot: {env_file}",
+    f"Message counts: {raw_counts_file}",
+    f"CSV summary: {summary_csv}",
+])
+summary_txt.write_text("\n".join(lines) + "\n")
+print(summary_txt.read_text(), end="")
+
+node.destroy_node()
+rclpy.shutdown()
+sys.exit(overall_exit)
+PY
