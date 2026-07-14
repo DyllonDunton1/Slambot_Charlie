@@ -24,10 +24,15 @@ if ! [[ "${SAMPLE_SECONDS}" =~ ^[0-9]+$ ]] || (( SAMPLE_SECONDS < 3 )); then
     exit 2
 fi
 
+# ROS environment setup scripts are not guaranteed to be safe under `set -u`.
+# Temporarily disable nounset while sourcing them, then restore it immediately.
+set +u
+
 if [[ -f "/opt/ros/${ROS_DISTRO}/setup.bash" ]]; then
     # shellcheck disable=SC1090
     source "/opt/ros/${ROS_DISTRO}/setup.bash"
 else
+    set -u
     echo "ROS setup not found: /opt/ros/${ROS_DISTRO}/setup.bash" >&2
     exit 1
 fi
@@ -36,10 +41,13 @@ if [[ -f "${REPO_ROOT}/ros2_ws/install/setup.bash" ]]; then
     # shellcheck disable=SC1091
     source "${REPO_ROOT}/ros2_ws/install/setup.bash"
 else
+    set -u
     echo "Workspace setup not found: ${REPO_ROOT}/ros2_ws/install/setup.bash" >&2
     echo "Build and source the workspace before running this script." >&2
     exit 1
 fi
+
+set -u
 
 mkdir -p "${RAW_DIR}"
 
