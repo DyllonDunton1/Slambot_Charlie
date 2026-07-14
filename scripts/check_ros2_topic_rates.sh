@@ -6,11 +6,9 @@ set -uo pipefail
 #
 # Usage:
 #   ./scripts/check_ros2_topic_rates.sh
-#   ./scripts/check_ros2_topic_rates.sh 20
+#   ./scripts/check_ros2_topic_rates.sh 30
 #   ./scripts/check_ros2_topic_rates.sh -unicast
-#   ./scripts/check_ros2_topic_rates.sh -unicast 20
-#
-# The optional integer is the sampling duration in seconds per topic.
+#   ./scripts/check_ros2_topic_rates.sh -unicast 30
 
 REPO_ROOT="${HOME}/Slambot_Charlie"
 ROS_DISTRO="${ROS_DISTRO:-humble}"
@@ -24,14 +22,8 @@ Usage: $0 [-unicast] [sample_seconds]
 
 Options:
   -unicast      Use Charlie's Fast DDS localhost unicast discovery profile.
-                Use this when Charlie was launched with -unicast.
+                 Use this when Charlie was launched with -unicast.
   -h, --help    Show this help message.
-
-Examples:
-  $0
-  $0 30
-  $0 -unicast
-  $0 -unicast 30
 EOF
 }
 
@@ -57,20 +49,12 @@ while [[ $# -gt 0 ]]; do
     shift
 done
 
-STAMP="$(date +%Y%m%d_%H%M%S)"
-OUTPUT_ROOT="${REPO_ROOT}/runtime/diagnostics/topic_rates_${STAMP}"
-SUMMARY_TXT="${OUTPUT_ROOT}/summary.txt"
-SUMMARY_CSV="${OUTPUT_ROOT}/summary.csv"
-RAW_DIR="${OUTPUT_ROOT}/raw"
-VISIBLE_TOPICS_FILE="${OUTPUT_ROOT}/visible_topics.txt"
-ENV_FILE="${OUTPUT_ROOT}/ros_environment.txt"
-
 if ! [[ "${SAMPLE_SECONDS}" =~ ^[0-9]+$ ]] || (( SAMPLE_SECONDS < 3 )); then
     echo "Sampling duration must be an integer of at least 3 seconds." >&2
     exit 2
 fi
 
-# ROS/ament setup scripts reference optional variables that may be unset.
+# ROS/ament setup scripts may reference optional variables that are unset.
 set +u
 if [[ -f "/opt/ros/${ROS_DISTRO}/setup.bash" ]]; then
     # shellcheck disable=SC1090
@@ -85,7 +69,6 @@ if [[ -f "${REPO_ROOT}/ros2_ws/install/setup.bash" ]]; then
     source "${REPO_ROOT}/ros2_ws/install/setup.bash"
 else
     echo "Workspace setup not found: ${REPO_ROOT}/ros2_ws/install/setup.bash" >&2
-    echo "Build and source the workspace before running this script." >&2
     exit 1
 fi
 set -u
@@ -99,6 +82,13 @@ if [[ "${USE_UNICAST}" == "true" ]]; then
     export FASTDDS_DEFAULT_PROFILES_FILE="${DDS_PROFILE}"
 fi
 
+STAMP="$(date +%Y%m%d_%H%M%S)"
+OUTPUT_ROOT="${REPO_ROOT}/runtime/diagnostics/topic_rates_${STAMP}"
+SUMMARY_TXT="${OUTPUT_ROOT}/summary.txt"
+SUMMARY_CSV="${OUTPUT_ROOT}/summary.csv"
+RAW_DIR="${OUTPUT_ROOT}/raw"
+VISIBLE_TOPICS_FILE="${OUTPUT_ROOT}/visible_topics.txt"
+ENV_FILE="${OUTPUT_ROOT}/ros_environment.txt"
 mkdir -p "${RAW_DIR}"
 
 {
@@ -109,31 +99,26 @@ mkdir -p "${RAW_DIR}"
     printf 'USE_UNICAST=%s\n' "${USE_UNICAST}"
 } > "${ENV_FILE}"
 
-# Avoid stale ros2daemon discovery state before checking the graph.
-ros2 daemon stop >/dev/null 2>&1 || true
-sleep 1
+# Do not stop the shared ros2 daemon here. Doing so can invalidate concurrent
+# CLI contexts. Also, a topic-list command may return nonzero even after it has
+# printed a valid list, so the captured content is the source of truth.
+topic_list_status=0
+ros2 topic list > "${VISIBLE_TOPICS_FILE}" 2>&1 || topic_list_status=$?
+visible_topic_count="$(grep -c '^/' "${VISIBLE_TOPICS_FILE}" 2>/dev/null || true)"
 
-if ! timeout 8 ros2 topic list > "${VISIBLE_TOPICS_FILE}" 2>&1; then
-    echo "Unable to query the ROS 2 topic graph." >&2
-    cat "${VISIBLE_TOPICS_FILE}" >&2
-    exit 1
-fi
-
-visible_topic_count="$(grep -c '^/' "${VISIBLE_TOPICS_FILE}" || true)"
 if (( visible_topic_count == 0 )); then
     echo "No ROS 2 topics are visible from this shell." >&2
+    echo "ros2 topic list exit status: ${topic_list_status}" >&2
+    cat "${VISIBLE_TOPICS_FILE}" >&2
     echo >&2
     cat "${ENV_FILE}" >&2
     echo >&2
     echo "If Charlie was launched with -unicast, run:" >&2
     echo "  $0 -unicast ${SAMPLE_SECONDS}" >&2
-    echo >&2
-    echo "Visible-topic output saved to: ${VISIBLE_TOPICS_FILE}" >&2
     exit 1
 fi
 
-# Format:
-#   topic|min_hz|max_hz|required|description
+# topic|min_hz|max_hz|required|description
 TOPIC_SPECS=(
     "/scan|4.0|6.5|required|LiDAR scan; expected around 5 Hz"
     "/odom|8.0|60.0|required|Base or active odometry stream"
@@ -166,7 +151,6 @@ compare_rate() {
     local rate="$1"
     local min_hz="$2"
     local max_hz="$3"
-
     awk -v r="${rate}" -v lo="${min_hz}" -v hi="${max_hz}" 'BEGIN {
         if (r < lo) print "LOW";
         else if (r > hi) print "HIGH";
@@ -180,9 +164,8 @@ printf 'Sample duration: %s seconds per topic\n' "${SAMPLE_SECONDS}" >> "${SUMMA
 printf 'Visible ROS topics: %s\n' "${visible_topic_count}" >> "${SUMMARY_TXT}"
 printf 'Unicast profile: %s\n' "${USE_UNICAST}" >> "${SUMMARY_TXT}"
 printf 'Output directory: %s\n\n' "${OUTPUT_ROOT}" >> "${SUMMARY_TXT}"
-printf '%-34s %-10s %-17s %-10s %s\n' "TOPIC" "OBSERVED" "EXPECTED" "STATUS" "NOTES" >> "${SUMMARY_TXT}"
-printf '%-34s %-10s %-17s %-10s %s\n' "----------------------------------" "----------" "-----------------" "----------" "------------------------------" >> "${SUMMARY_TXT}"
-
+printf '%-34s %-10s %-17s %-12s %s\n' "TOPIC" "OBSERVED" "EXPECTED" "STATUS" "NOTES" >> "${SUMMARY_TXT}"
+printf '%-34s %-10s %-17s %-12s %s\n' "----------------------------------" "----------" "-----------------" "------------" "------------------------------" >> "${SUMMARY_TXT}"
 printf 'topic,observed_hz,min_hz,max_hz,required,status,description,raw_file\n' > "${SUMMARY_CSV}"
 
 pids=()
@@ -197,24 +180,20 @@ for spec in "${TOPIC_SPECS[@]}"; do
     printf '%s|%s|%s|%s|%s|%s\n' \
         "${topic}" "${min_hz}" "${max_hz}" "${required}" "${description}" "${raw_file}" \
         > "${metadata_file}"
+    metadata_files+=("${metadata_file}")
 
     if ! grep -Fxq "${topic}" "${VISIBLE_TOPICS_FILE}"; then
         printf 'Topic is not present in ros2 topic list.\n' > "${raw_file}"
-        metadata_files+=("${metadata_file}")
         continue
     fi
 
     echo "Sampling ${topic} for ${SAMPLE_SECONDS}s..."
     (
-        # ros2 topic hz is Python-based. Force unbuffered output so its periodic
-        # averages reach the file before timeout sends SIGINT.
-        PYTHONUNBUFFERED=1 timeout --signal=INT --kill-after=3 "${SAMPLE_SECONDS}" \
-            ros2 topic hz --window 100 "${topic}" > "${raw_file}" 2>&1
-        exit 0
+        PYTHONUNBUFFERED=1 stdbuf -oL -eL \
+            timeout --signal=INT --kill-after=3 "${SAMPLE_SECONDS}" \
+            ros2 topic hz --window 100 "${topic}" > "${raw_file}" 2>&1 || true
     ) &
-
     pids+=("$!")
-    metadata_files+=("${metadata_file}")
 done
 
 for pid in "${pids[@]}"; do
@@ -245,7 +224,6 @@ for metadata_file in "${metadata_files[@]}"; do
     else
         comparison="$(compare_rate "${rate}" "${min_hz}" "${max_hz}")"
         observed="$(printf '%.2f' "${rate}")"
-
         case "${comparison}" in
             PASS)
                 status="PASS"
@@ -265,7 +243,7 @@ for metadata_file in "${metadata_files[@]}"; do
     fi
 
     expected="${min_hz}-${max_hz} Hz"
-    printf '%-34s %-10s %-17s %-10s %s\n' \
+    printf '%-34s %-10s %-17s %-12s %s\n' \
         "${topic}" "${observed}" "${expected}" "${status}" "${description}" \
         >> "${SUMMARY_TXT}"
 
@@ -293,5 +271,4 @@ done
 
 cat "${SUMMARY_TXT}"
 printf '\nCSV summary: %s\n' "${SUMMARY_CSV}"
-
 exit "${overall_exit}"
